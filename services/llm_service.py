@@ -418,6 +418,128 @@ def _expand_legal_query(query: str) -> list[str]:
 
 
 # ══════════════════════════════════════════════════════════
+# Direct Article Injection — precise SQL fetch of known articles
+# Bypasses RAG scoring for articles we KNOW we want, by using the
+# (article_number, law_pattern) pairs extracted from the expansion
+# results and querying PostgreSQL directly.
+# ══════════════════════════════════════════════════════════
+
+# Law-name patterns tuned to actual Qatari corpus in `chunks.law_name`.
+# Patterns are ILIKE-ready (contain % wildcards).
+_LAW_NAME_PATTERNS: dict[str, str] = {
+    "إجراءات جنائية":   "%الإجراءات الجنائية%",
+    "إجراءات جزائية":   "%الإجراءات الجزائية%",
+    "إجراءات":          "%الإجراءات%جنائية%",
+    "عقوبات":           "%العقوبات%11/2004%",
+    "قانون العقوبات":   "%العقوبات%11/2004%",
+    "قانون العمل":      "%قانون العمل رقم 14%",
+    "عمل":              "%قانون العمل رقم 14%",
+    "قانون الأسرة":     "%الأسرة رقم 22/2006%",
+    "الأسرة":           "%الأسرة رقم 22/2006%",
+    "أسرة":             "%الأسرة رقم 22/2006%",
+    "المدني":           "%المدني%",
+    "قانون المدني":     "%المدني%",
+    "مدني":             "%المدني%",
+    "التجارة":          "%قانون التجارة%",
+    "تجارة":            "%قانون التجارة%",
+    "الجرائم الإلكترونية": "%الجرائم الإلكترونية%",
+    "إلكترونية":        "%الجرائم الإلكترونية%",
+    "مخدرات":           "%مكافحة المخدرات%",
+}
+
+_ARTICLE_NUM_RE = re.compile(r"الماد[ةه]\s*\(?\s*(\d+)", re.UNICODE)
+
+
+def _extract_article_targets(
+    expansions: list[str],
+) -> list[tuple[str, str]]:
+    """From a list of legal-expansion phrases (output of
+    `_expand_legal_query`), extract `(article_number, law_pattern)`
+    pairs suitable for direct SQL fetch.
+
+    Example:
+      "خيانة الأمانة المادة 354 عقوبات" → ("354", "%العقوبات%11/2004%")
+      "رد الاعتبار القضائي المادة 380 إجراءات جنائية"
+                                       → ("380", "%الإجراءات الجنائية%")
+    """
+    targets: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for exp in expansions:
+        m = _ARTICLE_NUM_RE.search(exp)
+        if not m:
+            continue
+        art_num = m.group(1)
+        exp_lc = exp.lower()
+        pattern: str | None = None
+        # Prefer longest-key-first — "الإجراءات الجنائية" before "إجراءات"
+        for key in sorted(_LAW_NAME_PATTERNS, key=lambda k: -len(k)):
+            if key in exp_lc or key in exp:
+                pattern = _LAW_NAME_PATTERNS[key]
+                break
+        if pattern is None:
+            pattern = "%"
+        k = (art_num, pattern)
+        if k not in seen:
+            seen.add(k)
+            targets.append(k)
+    return targets[:12]
+
+
+async def direct_article_fetch(
+    pool, article_targets: list[tuple[str, str]],
+    max_per_article: int = 2,
+) -> list[dict]:
+    """Fetch specific articles directly from the chunks table by
+    (article_number, law_name pattern). Returns chunk-shaped dicts
+    with score=0.99 and source_type='direct_injection' so the caller
+    can prioritize them."""
+    if not pool or not article_targets:
+        return []
+    results: list[dict] = []
+    seen_keys: set[tuple] = set()
+    try:
+        async with pool.acquire() as conn:
+            for art_num, law_pattern in article_targets:
+                try:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, law_id, source, law_name, law_number,
+                               law_year, article_number, content, domain
+                        FROM chunks
+                        WHERE article_number = $1
+                          AND law_name ILIKE $2
+                          AND (is_active IS NULL OR is_active = TRUE)
+                          AND law_name NOT ILIKE '%أحكام محكمة التمييز%'
+                        ORDER BY LENGTH(content) DESC
+                        LIMIT $3
+                        """,
+                        art_num, law_pattern, max_per_article,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "direct_article_fetch art=%s law=%s: %s",
+                        art_num, law_pattern, e,
+                    )
+                    continue
+                for r in rows:
+                    key = (r["law_name"], r["article_number"])
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        d = dict(r)
+                        d["score"] = 0.99
+                        d["source_type"] = "direct_injection"
+                        results.append(d)
+    except Exception as e:
+        log.warning("direct_article_fetch pool acquire: %s", e)
+        return []
+    log.info(
+        "direct_article_fetch: %d targets → %d chunks",
+        len(article_targets), len(results),
+    )
+    return results
+
+
+# ══════════════════════════════════════════════════════════
 # Chain of Thought — تفكير داخلي
 # ══════════════════════════════════════════════════════════
 def rule_based_cot(q: str) -> dict:

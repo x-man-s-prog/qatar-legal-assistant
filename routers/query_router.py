@@ -619,6 +619,45 @@ async def handle_general(
                 except Exception as _ee:
                     log.debug("legal_expansion hook: %s", _ee)
 
+                # ═══ Direct Article Injection ═══
+                # Use the same expansion phrases to extract
+                # (article_number, law_pattern) pairs and fetch the
+                # exact DB chunks bypassing vector/keyword scoring.
+                try:
+                    from services.llm_service import (
+                        _expand_legal_query as _elq,
+                        _extract_article_targets as _eat,
+                        direct_article_fetch as _daf,
+                    )
+                    exps = _elq(query)
+                    art_targets = _eat(exps) if exps else []
+                    if art_targets:
+                        direct = await _daf(
+                            _app_state.pool, art_targets, max_per_article=2,
+                        )
+                        if direct:
+                            existing_keys = {
+                                (s.get("law_name"), s.get("article_number"))
+                                for s in sources
+                            }
+                            injected = 0
+                            # Insert direct chunks at the TOP so the
+                            # composer sees them first.
+                            for dc in direct:
+                                k = (dc.get("law_name"),
+                                     dc.get("article_number"))
+                                if k not in existing_keys:
+                                    sources.insert(0, dc)
+                                    existing_keys.add(k)
+                                    injected += 1
+                            log.info(
+                                "direct_injection: %d articles injected "
+                                "(targets=%d) for %r",
+                                injected, len(art_targets), query[:50],
+                            )
+                except Exception as _dir_err:
+                    log.warning("direct_injection hook: %s", _dir_err)
+
                 if supp:
                     log.info("supplementary search: %d queries", len(supp))
                     try:
@@ -672,7 +711,13 @@ async def handle_general(
                 lyear = ch.get("law_year", "")   or ""
                 cont  = (ch.get("content", "") or "")[:900]
 
-                header = f"[مصدر {i}]"
+                # Direct-injection sources are flagged prominently so
+                # the LLM knows these are exact DB matches.
+                src_type = ch.get("source_type", "rag")
+                if src_type == "direct_injection":
+                    header = f"[مصدر {i} — نص قانوني مباشر ⭐]"
+                else:
+                    header = f"[مصدر {i}]"
                 if law:
                     header += f" القانون: {law}"
                 if lnum:
@@ -693,8 +738,9 @@ async def handle_general(
                     "1. **التكييف القانوني**: حدّد الوصف الدقيق للواقعة. "
                     "إن احتملت وصفاً أكثر من واحد (سرقة / خيانة أمانة / اختلاس / احتيال) — "
                     "اذكرها وحدّد الأرجح.\n"
-                    "2. **النصوص المنطبقة**: اذكر كل مادة ذات صلة من النصوص أعلاه — "
-                    "المادة الأساسية + مواد الظروف المشددة/المخففة + مواد الإجراءات.\n"
+                    "2. **النصوص المنطبقة**: اذكر كل مادة مُعلَّمة بـ ⭐ "
+                    "(نص قانوني مباشر) — **كل واحدة منها** بصراحة بشرحها "
+                    "ورقمها واسم قانونها. ثم أضف بقية المواد ذات الصلة.\n"
                     "3. **التحليل التطبيقي**: افتح بـ «في حالتك:» وطبّق النصوص "
                     "على تفاصيل السؤال (المبالغ، السوابق، الاعتراف...).\n"
                     "4. **التوقعات**: العقوبة (حد أدنى/أقصى)، احتمال التشديد "
@@ -702,6 +748,8 @@ async def handle_general(
                     "5. **التوصيات العملية**: خطوات مرقمة (بلاغ → تحقيق → ...)، "
                     "مستندات مطلوبة، مواعيد تقادم/طعن.\n\n"
                     "قواعد:\n"
+                    "• **كل مادة مُعلَّمة بـ ⭐ يجب أن تُذكر في الإجابة بشكل صريح.** "
+                    "هذه مواد مُنتقاة آلياً بدقة لسؤالك وتُعدّ الأهم.\n"
                     "• لا تكتفِ بذكر المواد — طبّقها.\n"
                     "• كل حكم = مادة + قانون + رقمه + سنته.\n"
                     "• استخرج أقصى ما يمكن من النصوص أعلاه قبل أن تقول 'لم أجد'.\n"
