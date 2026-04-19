@@ -52,8 +52,9 @@ from core.runtime_v2.adapter import (
 )
 # ── Phase 0 router (pre-runtime_v2 shunt) ──
 from core.phase0_router import route_query
-from core.nlp_utils import get_history, add_to_history
 from core import cancellation as _cancel
+# NOTE: `get_history`/`add_to_history` were previously imported here but
+# are unused — history is passed explicitly through request payloads.
 
 # ── Legal Concept DB + Hallucination Guard (Part 2) ──
 try:
@@ -79,8 +80,9 @@ except Exception as _lc_err:  # pragma: no cover — degrade open
 
 # ── Optional imports for Phase 2/3 handlers (lazy — degrade on miss) ──
 import asyncio
-import asyncpg  # noqa: F401 — used inside handlers via connection
 from core import app_state as _app_state
+# NOTE: `asyncpg` was previously imported here but handlers access the
+# pool via `_app_state.pool` — direct asyncpg import is not needed.
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -94,8 +96,12 @@ router = APIRouter()
 import re as _re_mem
 try:
     import redis as _redis_mod
-except Exception:
+except Exception as _redis_err:
     _redis_mod = None
+    logging.getLogger(__name__).warning(
+        "redis module import failed — answer memory disabled: %s",
+        type(_redis_err).__name__,
+    )
 
 _REDIS_HOST = "legal_redis"
 _REDIS_PORT = 6379
@@ -119,7 +125,8 @@ def _get_redis():
         )
         r.ping()
         return r
-    except Exception:
+    except Exception as e:
+        log.warning("redis unavailable (%s) — falling back to in-memory", type(e).__name__)
         return None
 
 
@@ -162,7 +169,8 @@ def _retrieve_answer_facts(sid: str) -> str:
         return ""
     try:
         items = r.lrange(f"answer_memory:{sid}", 0, 4)
-    except Exception:
+    except Exception as e:
+        log.warning("answer_memory lrange failed: %s", e)
         return ""
     if not items:
         return ""
@@ -1603,6 +1611,13 @@ async def query_stream(req: QueryRequest, request: Request = None):
 
     # ═════════════════════════════════════════════════════════════════
     # Memo Continuation Detection (runs BEFORE phase0_router)
+    # ─────────────────────────────────────────────────────────────────
+    # ⚠ MEMO DETECTION SOURCE-OF-TRUTH GUARDRAIL — see:
+    #   1. core/phase0_router.py     :: _MEMO_TRIGGERS
+    #   2. routers/query_router.py   :: THIS block + _MEMO_TOPIC_MAP +
+    #                                    _MEMO_GAPS
+    #   3. core/runtime_v2/pipeline.py :: _DRAFT_TRIGGERS
+    # Any change to memo phrasing must be mirrored in all three places.
     # ─────────────────────────────────────────────────────────────────
     # Fixes the 6-message-loop bug: user asks "اكتب مذكرة نفقة"
     # → assistant asks 5 questions → user answers with details (no

@@ -42,6 +42,13 @@ from core.runtime_v2.composer import compose_answer, compose_memo
 # variations like "اكتب لي مذكرة" / "اكتبلي مذكرة" / "صيغ لي صحيفة"
 # all resolve to drafting intent. Triggers are short substrings; any
 # hit is sufficient.
+#
+# ⚠ MEMO DETECTION SOURCE-OF-TRUTH GUARDRAIL — see:
+#   1. core/phase0_router.py     :: _MEMO_TRIGGERS
+#   2. routers/query_router.py   :: memo_continuation block +
+#                                    _MEMO_TOPIC_MAP + _MEMO_GAPS
+#   3. core/runtime_v2/pipeline.py :: _DRAFT_TRIGGERS   ← (this file)
+# Any change to memo phrasing must be mirrored in all three places.
 
 _DRAFT_TRIGGERS = (
     # Memo / brief

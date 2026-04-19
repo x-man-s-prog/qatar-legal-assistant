@@ -8,6 +8,7 @@ from core import app_state
 from core.config import (
     ANTHROPIC_KEY, GEMINI_KEY, OPENAI_KEY, OLLAMA_HOST,
     MODEL_CLAUDE_MAIN, MODEL_CLAUDE_FAST, MODEL_GEMINI, MODEL_OPENAI,
+    MODEL_OLLAMA_LLM,  # ← single source of truth (was duplicated lines 24/75)
     PRIMARY_MODEL,
 )
 from core.prompts import COT_SYSTEM, RERANK_SYSTEM
@@ -20,8 +21,6 @@ from core.nlp_utils import (
 )
 
 log = logging.getLogger(__name__)
-
-MODEL_OLLAMA_LLM = __import__('os').getenv("MODEL_OLLAMA_LLM", "qwen2.5:1.5b")
 
 # ── Optional intent_router (build_structured_context) ──
 try:
@@ -72,7 +71,7 @@ async def stream_claude(system: str, messages: list[dict],
 # ══════════════════════════════════════════════════════════
 # استدعاء Ollama (محلي — مجاني 100%)
 # ══════════════════════════════════════════════════════════
-MODEL_OLLAMA_LLM = os.getenv("MODEL_OLLAMA_LLM", "qwen2.5:1.5b")  # 1.5b أسرع بـ 30x من 7b
+# MODEL_OLLAMA_LLM is imported from core.config — single source of truth.
 
 async def stream_ollama(system: str, messages: list[dict], max_tokens: int = 3000) -> AsyncIterator[str]:
     """بث الإجابة عبر Ollama المحلي"""

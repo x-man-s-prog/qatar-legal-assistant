@@ -163,9 +163,12 @@ GUARANTEE_CHEQUE = DomainRules(
     key=DomainKey.GUARANTEE_CHEQUE,
     display_name="طبيعة الشيك: أداة وفاء أم شيك ضمان",
     keywords=(
-        "شيك", "شيك ضمان", "شيك على بياض", "شيك مؤجل", "شيك ضامن",
-        "بدون رصيد", "ضمان قرض", "شيك لضمان", "مؤرخ بتاريخ لاحق",
-        "إقرار مكتوب", "شيك بلا رصيد",
+        # P1-cleanup: removed "شيك" (too generic), "شيك مؤجل" (overlaps
+        # bad_check), "شيك بلا رصيد" (belongs to BAD_CHECK, was a keyword
+        # mis-categorization causing tie-breaker failures).
+        "شيك ضمان", "شيك على بياض", "شيك ضامن",
+        "ضمان قرض", "شيك لضمان", "مؤرخ بتاريخ لاحق",
+        "إقرار مكتوب",
     ),
     issues=(
         Issue("nature",
@@ -2227,18 +2230,39 @@ DOMAIN_REGISTRY: dict[DomainKey, DomainRules] = {
 
 
 def resolve_domain(query: str) -> DomainKey:
-    """Pure-function domain resolution from the four registered domains.
-    Highest keyword-hit count wins; ties are broken by registry order.
-    Returns UNKNOWN when no domain has even one keyword hit.
+    """Weighted domain resolution.
+
+    Scoring rules:
+      • Each keyword hit contributes 1.0 (single-word) or 2.0 (compound —
+        contains a space). Compound keywords are inherently more specific,
+        so a phrase hit like "شيك بلا رصيد" should outweigh two single-word
+        hits like "شيك" + "رصيد" when deciding between `bad_check` and
+        `guarantee_cheque`.
+      • Longer keyword phrases add an additional small length bonus so a
+        3-word phrase still beats two 2-word phrases on a near-tie.
+
+    Returns UNKNOWN when no domain achieves a score ≥ 1.0.
+    Replaces the previous "highest keyword hit count wins" rule which
+    caused false positives on "شيك بلا رصيد" → guarantee_cheque and
+    "زوجي يضربني" → assault (fixed in deep-cleanup P1).
     """
     if not query:
         return DomainKey.UNKNOWN
     q = ar_norm(query)
     best_key = DomainKey.UNKNOWN
-    best_score = 0
+    best_score = 0.0
     for dr in DOMAIN_REGISTRY.values():
-        score = sum(1 for kw in dr.keywords if ar_norm(kw) in q)
+        score = 0.0
+        for kw in dr.keywords:
+            kw_norm = ar_norm(kw)
+            if kw_norm and kw_norm in q:
+                # Compound phrases (contain whitespace) count double.
+                base = 2.0 if " " in kw_norm else 1.0
+                # Tiny length bonus: each extra word beyond the first
+                # adds 0.1 so longer phrases still dominate near-ties.
+                length_bonus = max(0, kw_norm.count(" ") - 1) * 0.1
+                score += base + length_bonus
         if score > best_score:
             best_score = score
             best_key = dr.key
-    return best_key if best_score >= 1 else DomainKey.UNKNOWN
+    return best_key if best_score >= 1.0 else DomainKey.UNKNOWN
