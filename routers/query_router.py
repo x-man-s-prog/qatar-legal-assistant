@@ -1444,15 +1444,50 @@ async def handle_memo_smart(
     query: str, sid: str, history: list,
 ) -> StreamingResponse:
     topic = _detect_memo_topic(query)
-    # Aggregate all user turns to assess total info supplied
+
+    # ═══ جمع كل المعلومات من المحادثة (أعمق من قبل) ═══
     blob = query
+    all_user_msgs: list[str] = []
     if history:
-        for m in history[-6:]:
+        # آخر 8 رسائل بدل 6 — لتفادي فقدان تفاصيل في محادثة طويلة
+        for m in history[-8:]:
             if m.get("role") == "user" and m.get("content"):
-                blob += " " + m["content"]
+                content = m["content"]
+                blob += " " + content
+                all_user_msgs.append(content)
+
     signals = _count_signals(blob)
 
+    # إذا الموضوع لم يُكتشف من الرسالة الحالية — جرّب رسائل المستخدم السابقة
+    # لأن طلب "اكتب المذكرة" عادة لا يحمل كلمات مفتاحية (مثل "نفقة").
+    if topic == "عام" and all_user_msgs:
+        for prev in reversed(all_user_msgs):
+            prev_topic = _detect_memo_topic(prev)
+            if prev_topic != "عام":
+                topic = prev_topic
+                log.info(
+                    "memo_smart: topic recovered from history → %s", topic
+                )
+                break
+
     gaps = _MEMO_GAPS.get(topic)
+
+    # ═══ إصلاح: إذا الرسالة الحالية أمر مختصر وكل التفاصيل في السابقة ═══
+    # السيناريو: "اكتب مذكرة نفقة" → النظام يسأل → المستخدمة تعطي كل
+    # التفاصيل في رسالة واحدة → تقول "يلا اكتب". في هذه الحالة signals
+    # الكلي كافٍ لكن الرسالة الحالية وحدها ضعيفة — نعتمد على الكلي.
+    if gaps and signals < gaps["min_signals"] and all_user_msgs:
+        if len(query.split()) <= 6:
+            prev_blob = " ".join(all_user_msgs)
+            prev_signals = _count_signals(prev_blob)
+            if prev_signals >= gaps["min_signals"]:
+                signals = prev_signals
+                log.info(
+                    "memo_smart: details found in prior messages "
+                    "(prev_signals=%d ≥ min=%d) — bypassing ask",
+                    prev_signals, gaps["min_signals"],
+                )
+
     if gaps and signals < gaps["min_signals"]:
         # Not enough info — ask smart questions
         async def ask_gen():
@@ -1475,15 +1510,34 @@ async def handle_memo_smart(
                 yield frame
         return StreamingResponse(ask_gen(), media_type="text/event-stream")
 
-    # Sufficient info — delegate to runtime_v2, merging history into query
+    # ═══ Sufficient info — build a SMART combined query for runtime_v2 ═══
+    # يجمع كل الرسائل بدون تكرار، ويرتّبها بحيث الأطول (الأغنى بالتفاصيل)
+    # يأتي أولاً. هذا يسمح لـ runtime_v2 بأن يقرأ كل الوقائع دفعة واحدة
+    # حتى لو الرسالة الحالية مجرد "يلا اكتب".
     combined = query
     if history:
         user_msgs = [
-            m.get("content", "") for m in history
+            (m.get("content") or "").strip() for m in history
             if m.get("role") == "user" and m.get("content")
         ]
+        user_msgs = [u for u in user_msgs if u]
         if user_msgs:
-            combined = " | ".join(user_msgs[-3:]) + " | " + query
+            # آخر 5 رسائل، الأطول أولاً (أغنى بالتفاصيل)
+            detailed_msgs = sorted(user_msgs[-5:], key=len, reverse=True)
+            all_parts = detailed_msgs + [query.strip()]
+            seen: set[str] = set()
+            unique_parts: list[str] = []
+            for p in all_parts:
+                if p and p not in seen:
+                    seen.add(p)
+                    unique_parts.append(p)
+            if unique_parts:
+                combined = " | ".join(unique_parts)
+
+    log.info(
+        "memo_smart combined query (len=%d): '%s%s'",
+        len(combined), combined[:120], "…" if len(combined) > 120 else "",
+    )
 
     async def memo_gen():
         for kind, payload in _v2_stream_frames(combined, sid, history or [], chunk=40):
@@ -1546,6 +1600,100 @@ async def query_stream(req: QueryRequest, request: Request = None):
     if _bctx:
         _bctx.session_id = sid
         _bctx.query = q[:200]
+
+    # ═════════════════════════════════════════════════════════════════
+    # Memo Continuation Detection (runs BEFORE phase0_router)
+    # ─────────────────────────────────────────────────────────────────
+    # Fixes the 6-message-loop bug: user asks "اكتب مذكرة نفقة"
+    # → assistant asks 5 questions → user answers with details (no
+    # word "مذكرة") → phase0 routes to `general` → empty analysis.
+    # Here we detect that the user is ANSWERING memo questions or
+    # CONTINUING a memo request, and force route=memo regardless of
+    # phase0's verdict.
+    #
+    # Three triggers (any one → force memo):
+    #   (A) ANY prior assistant message asked for memo details
+    #   (B) ANY prior user message requested a memo, and current message
+    #       is short (≤6 words) or contains digits/details
+    #   (C) current message contains explicit memo keyword
+    #       (محاولة أخيرة — phase0 قد يفوّت «يلا اكتب المذكرة»)
+    # ═════════════════════════════════════════════════════════════════
+    _force_memo = False
+    if req.history and len(req.history) >= 2:
+        _hist_assistant_blob = " ".join(
+            (m.get("content") or "") for m in req.history
+            if m.get("role") == "assistant"
+        )
+        _hist_user_blob = " ".join(
+            (m.get("content") or "") for m in req.history
+            if m.get("role") == "user"
+        )
+
+        # (A) هل أي ردّ سابق كان سؤال "قبل ما أكتب مذكرة" / "أحتاج التفاصيل"؟
+        _memo_ask_indicators = (
+            "قبل ما أكتب مذكرة",
+            "قبل ما اكتب مذكره",
+            "قبل ما اكتب مذكرة",
+            "قبل ما أكتب مذكره",
+            "أحتاج منك هذه التفاصيل",
+            "أحتاج منك التفاصيل",
+            "لصياغة مذكرة",
+            "أخبرني بما تعرفه",
+            "اكتب بالمعلومات المتوفرة",
+            "احتاج منك التفاصيل",  # بدون همزة
+        )
+        if any(ind in _hist_assistant_blob for ind in _memo_ask_indicators):
+            _force_memo = True
+            log.info(
+                "memo_continuation(A): prior assistant asked memo details "
+                "→ route=memo"
+            )
+
+        # (B) هل أي رسالة سابقة من المستخدم طلبت مذكرة + الحالية قصيرة/أرقام؟
+        if not _force_memo:
+            _memo_keywords_in_prev = (
+                "مذكره", "مذكرة", "صحيفه", "صحيفة",
+                "عريضه", "عريضة",
+            )
+            if any(kw in _hist_user_blob.lower()
+                   for kw in _memo_keywords_in_prev):
+                q_lower = q.lower()
+                has_numbers = bool(re.search(r"\d", q))
+                is_short_command = (
+                    len(q.split()) <= 8
+                    and any(
+                        w in q_lower
+                        for w in (
+                            "اكتب", "اكتبها", "مذكره", "مذكرة",
+                            "نعم", "تمام", "يلا", "يلّا", "يالله",
+                            "ابدأ", "ابدا", "طيب",
+                        )
+                    )
+                )
+                if has_numbers or is_short_command:
+                    _force_memo = True
+                    log.info(
+                        "memo_continuation(B): prior user asked memo + "
+                        "current=%s → route=memo",
+                        "short-cmd" if is_short_command else "has-details",
+                    )
+
+        # (C) current query explicitly contains a memo keyword
+        #     (phase0 may miss shorts like "يلا اكتب المذكرة")
+        if not _force_memo:
+            _q_lower = q.lower()
+            if any(kw in _q_lower for kw in (
+                "مذكره", "مذكرة", "صحيفه", "صحيفة",
+                "عريضه", "عريضة",
+            )):
+                _force_memo = True
+                log.info(
+                    "memo_continuation(C): current query has memo keyword "
+                    "→ route=memo"
+                )
+
+    if _force_memo:
+        return await handle_memo_smart(q, sid, req.history or [])
 
     # ── Phase 0 routing ──
     try:
