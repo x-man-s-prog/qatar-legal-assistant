@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="الميزان" />
+  <link rel="manifest" href="/static/manifest.json" />
+  <title>المساعد القانوني الذكي — الميزان القطري</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- marked.js for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- highlight.js for code blocks -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <!-- jsPDF for PDF export (Step 24) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+  /* المصادر والمراجع القانونية */
+  .sources-section {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: var(--card-bg, rgba(255,255,255,0.05));
+    border: 1px solid var(--border, rgba(255,255,255,0.1));
+  }
+  .source-item, .reference-item {
+    padding: 0.5rem 0.75rem;
+    margin: 0.25rem 0;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .source-item:hover, .reference-item:hover {
+    background: rgba(79,172,254,0.1);
+  }
+  .confidence-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border, #333);
+    margin-top: 0.5rem;
+    overflow: hidden;
+  }
+  .confidence-level {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #f43f5e, #f59e0b, #22c55e);
+    transition: width 0.5s;
+  }
+  /* ══ CLEAN MODE: Hide all non-answer UI elements ══ */
+  .confidence-meter,
+  .confidence-badge,
+  .confidence-bar,
+  .btn-sources,
+  .sources-section,
+  .source-item,
+  .reference-item,
+  .citation-panel,
+  .citation-item,
+  .followup-container,
+  .followup-btn,
+  .cot-panel,
+  #sourceDrawer,
+  #drawerOverlay,
+  .export-pdf-btn {
+    display: none !important;
+  }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════ SIDEBAR ═══ -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">⚖️</div>
+    <div class="logo-text">
+      <span class="logo-title">الميزان القانوني</span>
+      <span class="logo-sub">المساعد الذكي</span>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">الوضع</div>
+    <div class="mode-buttons">
+      <button class="mode-btn active" data-mode="expert" onclick="setMode('expert')">
+        <span class="mode-icon">🏛️</span>
+        <span>خبير قانوني</span>
+      </button>
+      <button class="mode-btn" data-mode="general" onclick="setMode('general')">
+        <span class="mode-icon">💬</span>
+        <span>استفسار عام</span>
+      </button>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:1.5rem;">النموذج الذكي</div>
+    <div class="model-buttons">
+      <button class="model-btn active" data-model="openai" onclick="setModel('openai')" id="btn-openai">
+        <span class="model-dot openai-dot"></span>
+        <span>ChatGPT — GPT-4o 🤖</span>
+      </button>
+      <button class="model-btn" data-model="gemini" onclick="setModel('gemini')">
+        <span class="model-dot gemini-dot"></span>
+        <span>Gemini (Google)</span>
+      </button>
+      <button class="model-btn" data-model="claude" onclick="setModel('claude')">
+        <span class="model-dot claude-dot"></span>
+        <span>Claude (Anthropic)</span>
+      </button>
+      <button class="model-btn" data-model="ollama" onclick="setModel('ollama')">
+        <span class="model-dot ollama-dot"></span>
+        <span>Ollama — محلي ⚡</span>
+      </button>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:1.5rem;">أدوات قانونية</div>
+    <button class="tool-btn" onclick="openCompareModal()" title="مقارنة قانونين">
+      ⚖️ قارن قانونين
+    </button>
+
+    <div class="nav-section-label" style="margin-top:1.5rem;">محادثات سابقة</div>
+    <div id="historyList" class="history-list">
+      <p class="history-empty">لا توجد محادثات سابقة</p>
+    </div>
+
+    <div class="nav-section-label" style="margin-top:1.5rem;">تعلّم تراكمي</div>
+    <div id="learningStats" class="learning-stats">
+      <div class="learn-stat-loading">جارٍ التحميل...</div>
+    </div>
+  </nav>
+
+  <!-- User Account Box (shown when logged in) -->
+  <div id="userAccountBox" class="user-account-box" style="display:none">
+    <div class="user-avatar" id="userAvatar">م</div>
+    <div class="user-info-text">
+      <span class="user-name" id="userEmailDisplay">مستخدم</span>
+      <span class="user-role" id="userRoleDisplay">user</span>
+    </div>
+    <button class="user-logout-btn" onclick="logoutUser()" title="تسجيل الخروج">↩</button>
+  </div>
+  <div id="userLoginPrompt" class="user-login-prompt">
+    <a href="/login" class="btn-login-link">تسجيل الدخول / إنشاء حساب</a>
+  </div>
+
+  <div class="sidebar-footer">
+    <button class="btn-new-chat" onclick="newChat()">
+      <span>＋</span> محادثة جديدة
+    </button>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel" id="settingsPanel">
+      <div class="settings-title">الإعدادات</div>
+      <div class="setting-row">
+        <label>مستوى التفصيل</label>
+        <select id="detailLevel" onchange="saveSettings()">
+          <option value="brief">مختصر</option>
+          <option value="detailed" selected>مفصّل</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>المجال القانوني المفضّل</label>
+        <select id="legalDomain" onchange="saveSettings()">
+          <option value="">كل المجالات</option>
+          <option value="عمالي">قانون العمل</option>
+          <option value="أسري">قانون الأسرة</option>
+          <option value="جزائي">قانون الجزاء</option>
+          <option value="تجاري">قانون التجارة</option>
+          <option value="مدني">القانون المدني</option>
+          <option value="إداري">القانون الإداري</option>
+        </select>
+      </div>
+    </div>
+    <div class="stats-bar">
+      <div class="stat-item">
+        <span class="stat-num" id="totalLaws">8,332</span>
+        <span class="stat-label">تشريع</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-item">
+        <span class="stat-num" id="totalWords">4.2م</span>
+        <span class="stat-label">كلمة</span>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ══════════════════════════════════════ MAIN AREA ═══ -->
+<main class="main-area">
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+    <div class="topbar-center">
+      <span class="topbar-title">المساعد القانوني الذكي</span>
+      <span class="topbar-badge" id="modelBadge">ChatGPT — GPT-4o 🤖</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="darkModeBtn"  class="lang-toggle-btn" onclick="toggleDarkMode()" title="Dark / Light mode">🌙</button>
+      <button id="langToggleBtn" class="lang-toggle-btn" onclick="toggleLanguage()" title="Switch Language / تبديل اللغة">EN</button>
+      <div id="statusDot" class="status-dot online" title="متصل"></div>
+    </div>
+  </header>
+
+  <!-- Chat Container -->
+  <div class="chat-container" id="chatContainer">
+
+    <!-- Welcome Screen -->
+    <div class="welcome-screen" id="welcomeScreen">
+      <div class="welcome-icon">⚖️</div>
+      <h1 class="welcome-title">مرحباً بك في المساعد القانوني الذكي</h1>
+      <p class="welcome-sub">مدعوم بتشريعات الميزان القطري — ٨٬٣٣٢ تشريع</p>
+
+      <div class="suggestions-grid">
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">📋</span>
+          <span>ما هي شروط تسجيل شركة في قطر؟</span>
+        </button>
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">⚖️</span>
+          <span>ما هي حقوق العمال وفق قانون العمل القطري؟</span>
+        </button>
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">🏠</span>
+          <span>ما هي إجراءات نقل ملكية العقار في قطر؟</span>
+        </button>
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">🔒</span>
+          <span>ما هي عقوبة الاحتيال الإلكتروني في القانون القطري؟</span>
+        </button>
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">👨‍👩‍👧</span>
+          <span>ما هي قوانين الأحوال الشخصية والطلاق في قطر؟</span>
+        </button>
+        <button class="suggestion-card" onclick="useSuggestion(this)">
+          <span class="sug-icon">🚗</span>
+          <span>ما هي عقوبات المرور وسحب الرخصة؟</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Messages List -->
+    <div class="messages-list" id="messagesList" style="display:none;"></div>
+
+  </div><!-- /chat-container -->
+
+  <!-- Chain of Thought Panel (collapsible) -->
+  <div class="cot-panel" id="cotPanel" style="display:none;">
+    <div class="cot-header" onclick="toggleCOT()">
+      <span class="cot-icon">🧠</span>
+      <span class="cot-title">تحليل داخلي (سلسلة التفكير)</span>
+      <span class="cot-toggle-icon" id="cotToggleIcon">▼</span>
+    </div>
+    <div class="cot-body" id="cotBody"></div>
+  </div>
+
+  <!-- Input Area -->
+  <div class="input-area">
+    <div class="input-wrapper">
+      <textarea
+        id="queryInput"
+        class="query-textarea"
+        placeholder="اكتب سؤالك القانوني هنا... (مثال: ما هي شروط الحصول على ترخيص تجاري؟)"
+        rows="1"
+        onkeydown="handleKeyDown(event)"
+        oninput="autoResize(this)"
+      ></textarea>
+      <div class="input-actions">
+        <button class="btn-send" id="sendBtn" onclick="sendQuery()" title="إرسال (Ctrl+Enter)">
+          <span id="sendIcon">➤</span>
+        </button>
+      </div>
+    </div>
+    <div class="input-footer">
+      <span class="input-hint">Ctrl+Enter للإرسال · Ctrl+K محادثة جديدة</span>
+      <span class="word-counter" id="wordCounter">0/2000</span>
+      <span class="session-id" id="sessionIdDisplay"></span>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════════════ SOURCE DRAWER ═══ -->
+<div class="source-drawer" id="sourceDrawer" style="display:none;">
+  <div class="drawer-header">
+    <span class="drawer-title">📚 المصادر القانونية</span>
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()" style="display:none;"></div>
+
+<!-- ═══════════════════════════════ STATUS TOAST ═══ -->
+<div class="status-toast" id="statusToast"></div>
+
+<!-- ═══════════════════════════════ COMPARE MODAL (Step 23) ═══ -->
+<div class="compare-overlay" id="compareOverlay" style="display:none;" onclick="closeCompareModal()"></div>
+<div class="compare-modal" id="compareModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="compareModalTitle">
+  <div class="compare-modal-header">
+    <span id="compareModalTitle">⚖️ مقارنة قانونين</span>
+    <button class="compare-close-btn" onclick="closeCompareModal()" aria-label="إغلاق">✕</button>
+  </div>
+  <div class="compare-modal-body">
+    <div class="compare-inputs">
+      <div class="compare-field">
+        <label>القانون الأول</label>
+        <input type="text" id="compareLawA" placeholder="مثال: قانون العمل" />
+      </div>
+      <div class="compare-vs">VS</div>
+      <div class="compare-field">
+        <label>القانون الثاني</label>
+        <input type="text" id="compareLawB" placeholder="مثال: قانون الخدمة المدنية" />
+      </div>
+    </div>
+    <div class="compare-field" style="margin-top:.75rem;">
+      <label>الجانب المُقارَن (اختياري)</label>
+      <input type="text" id="compareAspect" placeholder="مثال: الإجازات، الإشعار، العقوبات" />
+    </div>
+    <button class="compare-run-btn" id="compareRunBtn" onclick="runCompare()">
+      🔍 قارن الآن
+    </button>
+    <div id="compareResult" class="compare-result" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+// API key is now fetched securely via httpOnly cookie/session — NOT exposed in HTML
+window.APP_API_KEY = '';
+</script>
+<script src="/static/app.js"></script>
+<script>
+  // PWA — Service Worker registration
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/static/sw.js')
+        .then(reg => console.log('[SW] registered:', reg.scope))
+        .catch(err => console.warn('[SW] registration failed:', err));
+    });
+  }
+</script>
+</body>
+</html>

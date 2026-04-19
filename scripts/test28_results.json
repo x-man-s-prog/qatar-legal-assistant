@@ -1,0 +1,282 @@
+{
+  "conversations": {
+    "pass": 15,
+    "total": 15
+  },
+  "edge_cases": {
+    "pass": 3,
+    "total": 3
+  },
+  "final_30": [
+    {
+      "id": "Q1",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 3,
+      "grade": "pass",
+      "len": 402
+    },
+    {
+      "id": "Q2",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 4,
+      "grade": "pass",
+      "len": 606
+    },
+    {
+      "id": "Q3",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 0,
+      "grade": "pass",
+      "len": 540
+    },
+    {
+      "id": "Q4",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 2,
+      "grade": "pass",
+      "len": 739
+    },
+    {
+      "id": "Q5",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 3,
+      "grade": "pass",
+      "len": 448
+    },
+    {
+      "id": "Q6",
+      "conf": 32,
+      "time": 8.2,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1200
+    },
+    {
+      "id": "Q7",
+      "conf": 55,
+      "time": 9.5,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 1608
+    },
+    {
+      "id": "Q8",
+      "conf": 32,
+      "time": 9.2,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1504
+    },
+    {
+      "id": "Q9",
+      "conf": 24,
+      "time": 7.3,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1403
+    },
+    {
+      "id": "Q10",
+      "conf": 42,
+      "time": 9.7,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 1730
+    },
+    {
+      "id": "Q11",
+      "conf": 45,
+      "time": 11.4,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 2875
+    },
+    {
+      "id": "Q12",
+      "conf": 32,
+      "time": 13.0,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1503
+    },
+    {
+      "id": "Q13",
+      "conf": 27,
+      "time": 18.7,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1507
+    },
+    {
+      "id": "Q14",
+      "conf": 59,
+      "time": 10.4,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 1522
+    },
+    {
+      "id": "Q15",
+      "conf": 37,
+      "time": 12.2,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 586
+    },
+    {
+      "id": "Q16",
+      "conf": 85,
+      "time": 6.1,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1059
+    },
+    {
+      "id": "Q17",
+      "conf": 85,
+      "time": 7.3,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 1190
+    },
+    {
+      "id": "Q18",
+      "conf": 85,
+      "time": 6.5,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1196
+    },
+    {
+      "id": "Q19",
+      "conf": 100,
+      "time": 1.5,
+      "known": false,
+      "arts": 0,
+      "grade": "fail",
+      "len": 23
+    },
+    {
+      "id": "Q20",
+      "conf": 100,
+      "time": 1.7,
+      "known": false,
+      "arts": 0,
+      "grade": "fail",
+      "len": 30
+    },
+    {
+      "id": "Q21",
+      "conf": 100,
+      "time": 1.7,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 112
+    },
+    {
+      "id": "Q22",
+      "conf": 100,
+      "time": 5.6,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1196
+    },
+    {
+      "id": "Q23",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 0,
+      "grade": "pass",
+      "len": 583
+    },
+    {
+      "id": "Q24",
+      "conf": 32,
+      "time": 11.2,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 1488
+    },
+    {
+      "id": "Q25",
+      "conf": 85,
+      "time": 4.0,
+      "known": false,
+      "arts": 0,
+      "grade": "pass",
+      "len": 202
+    },
+    {
+      "id": "Q26",
+      "conf": 53,
+      "time": 10.2,
+      "known": false,
+      "arts": 2,
+      "grade": "pass",
+      "len": 2714
+    },
+    {
+      "id": "Q27",
+      "conf": 69,
+      "time": 12.7,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 665
+    },
+    {
+      "id": "Q28",
+      "conf": 51,
+      "time": 10.0,
+      "known": false,
+      "arts": 2,
+      "grade": "pass",
+      "len": 1883
+    },
+    {
+      "id": "Q29",
+      "conf": 36,
+      "time": 9.0,
+      "known": false,
+      "arts": 1,
+      "grade": "pass",
+      "len": 1732
+    },
+    {
+      "id": "Q30",
+      "conf": 100,
+      "time": 0.0,
+      "known": true,
+      "arts": 3,
+      "grade": "pass",
+      "len": 443
+    }
+  ]
+}

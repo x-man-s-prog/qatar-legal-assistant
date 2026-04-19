@@ -1,0 +1,8 @@
+سلام عليكم = greeting
+السلام عليكم = greeting
+هلا = greeting
+مرحبا = greeting
+هلا والله = greeting
+مساء الخير = greeting
+صباح الخير = greeting
+سلام = greeting

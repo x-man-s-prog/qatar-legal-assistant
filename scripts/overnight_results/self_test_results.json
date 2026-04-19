@@ -1,0 +1,802 @@
+[
+  {
+    "q_num": 1,
+    "question": "ما هي حقوق العامل عند الفصل التعسفي؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 654,
+    "is_good": true
+  },
+  {
+    "q_num": 2,
+    "question": "كم مدة الإشعار قبل إنهاء عقد العمل؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 494,
+    "is_good": true
+  },
+  {
+    "q_num": 3,
+    "question": "كيف تُحسب مكافأة نهاية الخدمة؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 470,
+    "is_good": true
+  },
+  {
+    "q_num": 4,
+    "question": "هل يحق لصاحب العمل فصلي بدون سبب؟",
+    "confidence": 50,
+    "domain": "قانوني",
+    "answer_length": 678,
+    "is_good": true
+  },
+  {
+    "q_num": 5,
+    "question": "كم الإجازة السنوية في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 567,
+    "is_good": true
+  },
+  {
+    "q_num": 6,
+    "question": "الكفيل طفشني من الشغل وش أسوي",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1354,
+    "is_good": true
+  },
+  {
+    "q_num": 7,
+    "question": "ما عطاني راتبي 3 شهور",
+    "confidence": 43,
+    "domain": "قانوني",
+    "answer_length": 667,
+    "is_good": true
+  },
+  {
+    "q_num": 8,
+    "question": "هل يحق لصاحب العمل حجز جوازي؟",
+    "confidence": 67,
+    "domain": "قانوني",
+    "answer_length": 652,
+    "is_good": true
+  },
+  {
+    "q_num": 9,
+    "question": "تم تخفيض راتبي بدون موافقتي",
+    "confidence": 35,
+    "domain": "قانوني",
+    "answer_length": 1470,
+    "is_good": true
+  },
+  {
+    "q_num": 10,
+    "question": "كم ساعات العمل القانونية في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 667,
+    "is_good": true
+  },
+  {
+    "q_num": 11,
+    "question": "هل يحق لي الاستقالة فوراً؟",
+    "confidence": 27,
+    "domain": "قانوني",
+    "answer_length": 2148,
+    "is_good": true
+  },
+  {
+    "q_num": 12,
+    "question": "ما حقوق المرأة الحامل في العمل؟",
+    "confidence": 60,
+    "domain": "قانوني",
+    "answer_length": 1477,
+    "is_good": true
+  },
+  {
+    "q_num": 13,
+    "question": "هل يحق لي أجر عن ساعات العمل الإضافية؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 667,
+    "is_good": true
+  },
+  {
+    "q_num": 14,
+    "question": "ما إجراءات تقديم شكوى عمالية؟",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1326,
+    "is_good": true
+  },
+  {
+    "q_num": 15,
+    "question": "هل يحق لي نقل الكفالة بدون موافقة الكفيل؟",
+    "confidence": 24,
+    "domain": "قانوني",
+    "answer_length": 2497,
+    "is_good": true
+  },
+  {
+    "q_num": 16,
+    "question": "ما حقوق العامل المنزلي في قطر؟",
+    "confidence": 30,
+    "domain": "قانوني",
+    "answer_length": 1388,
+    "is_good": true
+  },
+  {
+    "q_num": 17,
+    "question": "هل يحق فصل العامل أثناء المرض؟",
+    "confidence": 43,
+    "domain": "قانوني",
+    "answer_length": 1397,
+    "is_good": true
+  },
+  {
+    "q_num": 18,
+    "question": "ما هي حالات إنهاء العقد بدون إشعار؟",
+    "confidence": 16,
+    "domain": "قانوني",
+    "answer_length": 1263,
+    "is_good": false
+  },
+  {
+    "q_num": 19,
+    "question": "كيف أرفع دعوى عمالية في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 669,
+    "is_good": true
+  },
+  {
+    "q_num": 20,
+    "question": "هل فيه فترة تجربة وكم مدتها؟",
+    "confidence": 49,
+    "domain": "قانوني",
+    "answer_length": 1304,
+    "is_good": true
+  },
+  {
+    "q_num": 21,
+    "question": "ما عقوبة السرقة في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 402,
+    "is_good": true
+  },
+  {
+    "q_num": 22,
+    "question": "ما عقوبة الضرب والإيذاء؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 583,
+    "is_good": true
+  },
+  {
+    "q_num": 23,
+    "question": "ما عقوبة شيك بدون رصيد؟",
+    "confidence": 50,
+    "domain": "قانوني",
+    "answer_length": 1595,
+    "is_good": true
+  },
+  {
+    "q_num": 24,
+    "question": "ما عقوبة التشهير؟",
+    "confidence": 53,
+    "domain": "قانوني",
+    "answer_length": 1392,
+    "is_good": true
+  },
+  {
+    "q_num": 25,
+    "question": "ما عقوبة التهديد والابتزاز؟",
+    "confidence": 61,
+    "domain": "قانوني",
+    "answer_length": 680,
+    "is_good": true
+  },
+  {
+    "q_num": 26,
+    "question": "ما عقوبة السحر والشعوذة؟",
+    "confidence": 58,
+    "domain": "قانوني",
+    "answer_length": 1455,
+    "is_good": true
+  },
+  {
+    "q_num": 27,
+    "question": "ما عقوبة حيازة المخدرات؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 555,
+    "is_good": true
+  },
+  {
+    "q_num": 28,
+    "question": "ما عقوبة القتل الخطأ؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 544,
+    "is_good": true
+  },
+  {
+    "q_num": 29,
+    "question": "ما عقوبة التزوير؟",
+    "confidence": 30,
+    "domain": "قانوني",
+    "answer_length": 1361,
+    "is_good": true
+  },
+  {
+    "q_num": 30,
+    "question": "ما عقوبة الرشوة؟",
+    "confidence": 29,
+    "domain": "قانوني",
+    "answer_length": 595,
+    "is_good": true
+  },
+  {
+    "q_num": 31,
+    "question": "واحد ناصبني بـ 100 ألف ريال",
+    "confidence": 50,
+    "domain": "قانوني",
+    "answer_length": 1636,
+    "is_good": true
+  },
+  {
+    "q_num": 32,
+    "question": "واحد هددني بالواتساب",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1515,
+    "is_good": true
+  },
+  {
+    "q_num": 33,
+    "question": "واحد سوى حساب باسمي بالانستقرام",
+    "confidence": 34,
+    "domain": "قانوني",
+    "answer_length": 1718,
+    "is_good": true
+  },
+  {
+    "q_num": 34,
+    "question": "واحد شهّر فيني على تويتر",
+    "confidence": 25,
+    "domain": "قانوني",
+    "answer_length": 1497,
+    "is_good": true
+  },
+  {
+    "q_num": 35,
+    "question": "هل محاولة الانتحار جريمة في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 456,
+    "is_good": true
+  },
+  {
+    "q_num": 36,
+    "question": "متى يسقط الحق في رفع الدعوى الجنائية؟",
+    "confidence": 20,
+    "domain": "قانوني",
+    "answer_length": 1498,
+    "is_good": false
+  },
+  {
+    "q_num": 37,
+    "question": "ما هو الدفاع الشرعي؟",
+    "confidence": 31,
+    "domain": "قانوني",
+    "answer_length": 1443,
+    "is_good": true
+  },
+  {
+    "q_num": 38,
+    "question": "ما عقوبة خيانة الأمانة؟",
+    "confidence": 50,
+    "domain": "قانوني",
+    "answer_length": 631,
+    "is_good": true
+  },
+  {
+    "q_num": 39,
+    "question": "ما عقوبة الاختلاس؟",
+    "confidence": 24,
+    "domain": "قانوني",
+    "answer_length": 1348,
+    "is_good": true
+  },
+  {
+    "q_num": 40,
+    "question": "كيف أقدم بلاغ جنائي في قطر؟",
+    "confidence": 31,
+    "domain": "قانوني",
+    "answer_length": 1342,
+    "is_good": true
+  },
+  {
+    "q_num": 41,
+    "question": "كيف إجراءات الطلاق في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 606,
+    "is_good": true
+  },
+  {
+    "q_num": 42,
+    "question": "حرمتي تبي خلع وأنا مب موافق",
+    "confidence": 33,
+    "domain": "قانوني",
+    "answer_length": 1392,
+    "is_good": true
+  },
+  {
+    "q_num": 43,
+    "question": "ما حقوق الحضانة بعد الطلاق؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 739,
+    "is_good": true
+  },
+  {
+    "q_num": 44,
+    "question": "متى تنتهي حضانة الأم؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 739,
+    "is_good": true
+  },
+  {
+    "q_num": 45,
+    "question": "ما هي النفقة الزوجية؟",
+    "confidence": 73,
+    "domain": "قانوني",
+    "answer_length": 633,
+    "is_good": true
+  },
+  {
+    "q_num": 46,
+    "question": "ما سن الزواج في قطر؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 567,
+    "is_good": true
+  },
+  {
+    "q_num": 47,
+    "question": "ما حكم الزواج بأجنبية في قطر؟",
+    "confidence": 83,
+    "domain": "قانوني",
+    "answer_length": 1334,
+    "is_good": true
+  },
+  {
+    "q_num": 48,
+    "question": "كيف يُقسم الميراث شرعياً؟",
+    "confidence": 85,
+    "domain": "قانوني",
+    "answer_length": 1780,
+    "is_good": true
+  },
+  {
+    "q_num": 49,
+    "question": "هل الوصية لوارث جائزة؟",
+    "confidence": 59,
+    "domain": "قانوني",
+    "answer_length": 1353,
+    "is_good": true
+  },
+  {
+    "q_num": 50,
+    "question": "ما حقوق الزوجة عند الطلاق؟",
+    "confidence": 71,
+    "domain": "قانوني",
+    "answer_length": 1529,
+    "is_good": true
+  },
+  {
+    "q_num": 51,
+    "question": "كيف أطلب النفقة من المحكمة؟",
+    "confidence": 41,
+    "domain": "قانوني",
+    "answer_length": 1839,
+    "is_good": true
+  },
+  {
+    "q_num": 52,
+    "question": "ما حقوق الزيارة للأب بعد الطلاق؟",
+    "confidence": 73,
+    "domain": "قانوني",
+    "answer_length": 1731,
+    "is_good": true
+  },
+  {
+    "q_num": 53,
+    "question": "هل يحق للأب منع الأم من السفر بالأطفال؟",
+    "confidence": 44,
+    "domain": "قانوني",
+    "answer_length": 1661,
+    "is_good": true
+  },
+  {
+    "q_num": 54,
+    "question": "ما مؤخر الصداق ومتى يُستحق؟",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1299,
+    "is_good": true
+  },
+  {
+    "q_num": 55,
+    "question": "هل يحق للأم غير المسلمة حضانة أطفالها؟",
+    "confidence": 75,
+    "domain": "قانوني",
+    "answer_length": 649,
+    "is_good": true
+  },
+  {
+    "q_num": 56,
+    "question": "ما حقوق المستأجر عند الإخلاء؟",
+    "confidence": 21,
+    "domain": "قانوني",
+    "answer_length": 1730,
+    "is_good": true
+  },
+  {
+    "q_num": 57,
+    "question": "صاحب البيت يبي يطلعني من الشقة",
+    "confidence": 42,
+    "domain": "قانوني",
+    "answer_length": 1738,
+    "is_good": true
+  },
+  {
+    "q_num": 58,
+    "question": "هل يحق للمؤجر زيادة الإيجار؟",
+    "confidence": 54,
+    "domain": "قانوني",
+    "answer_length": 629,
+    "is_good": true
+  },
+  {
+    "q_num": 59,
+    "question": "ما هي مدة التقادم المدني؟",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 770,
+    "is_good": true
+  },
+  {
+    "q_num": 60,
+    "question": "ما هو الشرط الجزائي في العقود؟",
+    "confidence": 18,
+    "domain": "قانوني",
+    "answer_length": 1389,
+    "is_good": false
+  },
+  {
+    "q_num": 61,
+    "question": "كيف أطالب بتعويض عن ضرر؟",
+    "confidence": 52,
+    "domain": "قانوني",
+    "answer_length": 1680,
+    "is_good": true
+  },
+  {
+    "q_num": 62,
+    "question": "ما ضمان العيوب الخفية في البيع؟",
+    "confidence": 43,
+    "domain": "قانوني",
+    "answer_length": 647,
+    "is_good": true
+  },
+  {
+    "q_num": 63,
+    "question": "كيف أفسخ عقد إيجار؟",
+    "confidence": 31,
+    "domain": "قانوني",
+    "answer_length": 1632,
+    "is_good": true
+  },
+  {
+    "q_num": 64,
+    "question": "ما المسؤولية التقصيرية؟",
+    "confidence": 45,
+    "domain": "قانوني",
+    "answer_length": 1754,
+    "is_good": true
+  },
+  {
+    "q_num": 65,
+    "question": "هل العقد الشفهي ملزم قانوناً؟",
+    "confidence": 44,
+    "domain": "قانوني",
+    "answer_length": 1433,
+    "is_good": true
+  },
+  {
+    "q_num": 66,
+    "question": "ما حكم بيع ملك الغير؟",
+    "confidence": 37,
+    "domain": "قانوني",
+    "answer_length": 1441,
+    "is_good": true
+  },
+  {
+    "q_num": 67,
+    "question": "كيف أسجل ملكية عقار في قطر؟",
+    "confidence": 49,
+    "domain": "قانوني",
+    "answer_length": 1485,
+    "is_good": true
+  },
+  {
+    "q_num": 68,
+    "question": "ما التزامات المؤجر تجاه المستأجر؟",
+    "confidence": 30,
+    "domain": "قانوني",
+    "answer_length": 1393,
+    "is_good": true
+  },
+  {
+    "q_num": 69,
+    "question": "كيف أطالب بدين بدون عقد مكتوب؟",
+    "confidence": 35,
+    "domain": "قانوني",
+    "answer_length": 637,
+    "is_good": true
+  },
+  {
+    "q_num": 70,
+    "question": "ما هو أمر الأداء؟",
+    "confidence": 27,
+    "domain": "قانوني",
+    "answer_length": 1464,
+    "is_good": true
+  },
+  {
+    "q_num": 71,
+    "question": "شريكي بالشركة ياخذ فلوس بدون علمي",
+    "confidence": 55,
+    "domain": "قانوني",
+    "answer_length": 1744,
+    "is_good": true
+  },
+  {
+    "q_num": 72,
+    "question": "كيف أؤسس شركة ذات مسؤولية محدودة في قطر؟",
+    "confidence": 69,
+    "domain": "قانوني",
+    "answer_length": 1543,
+    "is_good": true
+  },
+  {
+    "q_num": 73,
+    "question": "ما حقوق الشريك في شركة؟",
+    "confidence": 71,
+    "domain": "قانوني",
+    "answer_length": 1556,
+    "is_good": true
+  },
+  {
+    "q_num": 74,
+    "question": "كيف أصفي شركة؟",
+    "confidence": 33,
+    "domain": "قانوني",
+    "answer_length": 1831,
+    "is_good": true
+  },
+  {
+    "q_num": 75,
+    "question": "ما عقوبة الغش التجاري؟",
+    "confidence": 33,
+    "domain": "قانوني",
+    "answer_length": 649,
+    "is_good": true
+  },
+  {
+    "q_num": 76,
+    "question": "ما هي الوكالة التجارية؟",
+    "confidence": 53,
+    "domain": "قانوني",
+    "answer_length": 1348,
+    "is_good": true
+  },
+  {
+    "q_num": 77,
+    "question": "كيف أسجل علامة تجارية في قطر؟",
+    "confidence": 38,
+    "domain": "قانوني",
+    "answer_length": 1168,
+    "is_good": true
+  },
+  {
+    "q_num": 78,
+    "question": "ما هو الإفلاس وما شروطه؟",
+    "confidence": 59,
+    "domain": "قانوني",
+    "answer_length": 1429,
+    "is_good": true
+  },
+  {
+    "q_num": 79,
+    "question": "هل يحق لي كأقلية مساهمين الاطلاع على حسابات الشركة؟",
+    "confidence": 63,
+    "domain": "قانوني",
+    "answer_length": 2812,
+    "is_good": true
+  },
+  {
+    "q_num": 80,
+    "question": "ما مسؤولية مدير الشركة تجاه الشركاء؟",
+    "confidence": 52,
+    "domain": "قانوني",
+    "answer_length": 1528,
+    "is_good": true
+  },
+  {
+    "q_num": 81,
+    "question": "ولدي انضرب بالمدرسة وابي اشتكي",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1528,
+    "is_good": true
+  },
+  {
+    "q_num": 82,
+    "question": "واحد ماخذ فلوسي وما يبي يردهم",
+    "confidence": 18,
+    "domain": "قانوني",
+    "answer_length": 1351,
+    "is_good": false
+  },
+  {
+    "q_num": 83,
+    "question": "الشركة ما عطتني نهاية خدمة ولا شهادة",
+    "confidence": 45,
+    "domain": "قانوني",
+    "answer_length": 1573,
+    "is_good": true
+  },
+  {
+    "q_num": 84,
+    "question": "ريال يبزني بصور خاصة",
+    "confidence": 50,
+    "domain": "قانوني",
+    "answer_length": 1773,
+    "is_good": true
+  },
+  {
+    "q_num": 85,
+    "question": "خويي ضربني وكسر يدي وش أسوي",
+    "confidence": 49,
+    "domain": "قانوني",
+    "answer_length": 2589,
+    "is_good": true
+  },
+  {
+    "q_num": 86,
+    "question": "حرمتي سافرت بالعيال وما ترجع",
+    "confidence": 42,
+    "domain": "قانوني",
+    "answer_length": 1708,
+    "is_good": true
+  },
+  {
+    "q_num": 87,
+    "question": "يدي مات وأخوي ماخذ كل الميراث",
+    "confidence": 65,
+    "domain": "قانوني",
+    "answer_length": 1499,
+    "is_good": true
+  },
+  {
+    "q_num": 88,
+    "question": "مستأجر بمحلي ما يدفع إيجار 6 شهور",
+    "confidence": 65,
+    "domain": "قانوني",
+    "answer_length": 1889,
+    "is_good": true
+  },
+  {
+    "q_num": 89,
+    "question": "صاحب الشغل يطلب مني أشتغل 14 ساعة",
+    "confidence": 32,
+    "domain": "قانوني",
+    "answer_length": 1422,
+    "is_good": true
+  },
+  {
+    "q_num": 90,
+    "question": "تورطت بقضية مخدرات وأبي أعرف العقوبة",
+    "confidence": 100,
+    "domain": "معرفة قانونية محددة",
+    "answer_length": 555,
+    "is_good": true
+  },
+  {
+    "q_num": 91,
+    "question": "صيغ لي مذكرة دفاع في قضية ضرب",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1003,
+    "is_good": true
+  },
+  {
+    "q_num": 92,
+    "question": "صيغ لي عقد إيجار شقة",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1333,
+    "is_good": true
+  },
+  {
+    "q_num": 93,
+    "question": "صيغ لي عقد عمل",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 479,
+    "is_good": true
+  },
+  {
+    "q_num": 94,
+    "question": "صيغ لي لائحة دعوى فصل تعسفي",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1193,
+    "is_good": true
+  },
+  {
+    "q_num": 95,
+    "question": "صيغ لي عقد شراكة",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1014,
+    "is_good": true
+  },
+  {
+    "q_num": 96,
+    "question": "أبي نموذج شكوى عمالية",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1087,
+    "is_good": true
+  },
+  {
+    "q_num": 97,
+    "question": "صيغ لي مذكرة دفاع شيك بدون رصيد",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1142,
+    "is_good": true
+  },
+  {
+    "q_num": 98,
+    "question": "صيغ لي عقد بيع سيارة",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 697,
+    "is_good": true
+  },
+  {
+    "q_num": 99,
+    "question": "صيغ لي مذكرة طعن بالتمييز",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 1301,
+    "is_good": true
+  },
+  {
+    "q_num": 100,
+    "question": "أبي نموذج عقد توظيف مدير تنفيذي",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "answer_length": 989,
+    "is_good": true
+  }
+]

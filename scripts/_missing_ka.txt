@@ -1,0 +1,10 @@
+MISSING شيك_بدون_رصيد
+MISSING حجز_الجواز
+MISSING نقل_كفالة
+MISSING تحرش
+MISSING عنف_أسري
+MISSING كفالة
+MISSING وكالة
+MISSING مهر
+MISSING عدة
+MISSING غش_تجاري

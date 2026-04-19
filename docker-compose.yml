@@ -1,0 +1,194 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════
+# المساعد القانوني الذكي — Docker Compose (Production)
+# ═══════════════════════════════════════════════════════════
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f app
+#   docker-compose down -v   # حذف البيانات أيضاً
+# ═══════════════════════════════════════════════════════════
+
+services:
+
+  # ─── PostgreSQL + pgvector ────────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: legal_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-ragdb}
+      POSTGRES_USER:     ${DB_USER:-raguser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-RAGsecret2024!}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U ${DB_USER:-raguser} -d ${DB_NAME:-ragdb}"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
+    networks:
+      - legal_net
+
+  # ─── Redis — Semantic Cache + Session Store ───────────────
+  redis:
+    image: redis:7-alpine
+    container_name: legal_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfilename "redis.aof"
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test:     ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+      start_period: 10s
+    networks:
+      - legal_net
+
+  # ─── Ollama (local LLM + embeddings) ─────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: legal_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+    healthcheck:
+      test:     ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+      start_period: 60s
+    networks:
+      - legal_net
+    # Uncomment to enable GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ─── FastAPI Application ──────────────────────────────────
+  app:
+    build:
+      context:    .
+      dockerfile: Dockerfile
+    container_name: legal_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      # Database
+      DB_DSN:           postgresql://${DB_USER:-raguser}:${DB_PASSWORD:-RAGsecret2024!}@db:5432/${DB_NAME:-ragdb}
+      DB_HOST:          db
+      DB_PORT:          "5432"
+      DB_NAME:          ${DB_NAME:-ragdb}
+      DB_USER:          ${DB_USER:-raguser}
+      DB_PASSWORD:      ${DB_PASSWORD:-RAGsecret2024!}
+      API_KEY:          ${API_KEY:-}
+      JWT_SECRET:       ${JWT_SECRET:-}
+      # Redis
+      REDIS_URL:        redis://redis:6379/0
+      # Ollama
+      OLLAMA_HOST:      http://ollama:11434
+      # AI Models
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
+      MODEL_MAIN:        ${MODEL_MAIN:-claude-3-5-sonnet-20241022}
+      MODEL_FAST:        ${MODEL_FAST:-claude-3-haiku-20240307}
+      MODEL_GEMINI:      ${MODEL_GEMINI:-gemini-2.0-flash}
+      MODEL_OPENAI:      ${MODEL_OPENAI:-gpt-4o}
+      MODEL_EMBED:       ${MODEL_EMBED:-nomic-embed-text}
+      # App
+      APP_PORT:          ${APP_PORT:-8000}
+      ALLOWED_ORIGINS:   ${ALLOWED_ORIGINS:-http://localhost,http://localhost:80}
+    volumes:
+      - ${LAWS_DIR:-./laws}:/app/laws:ro
+      - app_logs:/app/logs
+    expose:
+      - "8000"
+    healthcheck:
+      test:     ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+      start_period: 40s
+    networks:
+      - legal_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ─── Nginx — Reverse Proxy + Static Files ────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: legal_nginx
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+      # TLS (uncomment in production):
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
+    healthcheck:
+      test:     ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+    networks:
+      - legal_net
+
+# ─── Volumes (persistent data) ────────────────────────────
+volumes:
+  pgdata:
+    driver: local
+    name: legalassistant_pgdata    # volume with indexed 41,626 chunks
+  redis_data:
+    driver: local
+    name: legal_redis_data
+  ollama_data:
+    driver: local
+    name: legal_ollama_data
+  app_logs:
+    driver: local
+    name: legal_app_logs
+  nginx_logs:
+    driver: local
+    name: legal_nginx_logs
+
+# ─── Networks ─────────────────────────────────────────────
+networks:
+  legal_net:
+    driver: bridge
+    name: legal_network

@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-04-08T10:07:04.388648",
+  "ruling_patterns": 14,
+  "article_pairs": 50,
+  "defense_rates": {
+    "قصور_تسبيب": {
+      "total": 815,
+      "accepted": 347,
+      "rate": 42.6
+    },
+    "إخلال_حق_دفاع": {
+      "total": 449,
+      "accepted": 201,
+      "rate": 44.8
+    },
+    "عدم_اختصاص": {
+      "total": 151,
+      "accepted": 57,
+      "rate": 37.7
+    },
+    "تقادم": {
+      "total": 217,
+      "accepted": 117,
+      "rate": 53.9
+    },
+    "بطلان_القبض": {
+      "total": 185,
+      "accepted": 69,
+      "rate": 37.3
+    },
+    "بطلان_التفتيش": {
+      "total": 102,
+      "accepted": 32,
+      "rate": 31.4
+    },
+    "انتفاء_القصد": {
+      "total": 48,
+      "accepted": 25,
+      "rate": 52.1
+    },
+    "دفاع_شرعي": {
+      "total": 14,
+      "accepted": 6,
+      "rate": 42.9
+    }
+  },
+  "defense_map_topics": 7,
+  "precedents_total": 342
+}

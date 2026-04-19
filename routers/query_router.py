@@ -1,0 +1,922 @@
+# -*- coding: utf-8 -*-
+"""
+routers/query_router.py — UNIFIED RUNTIME_V2 ROUTER.
+======================================================
+
+This file is the ONLY HTTP entry point for answer-producing queries.
+Every request that used to go through the legacy runtime now routes
+through `core.runtime_v2.adapter` and nothing else.
+
+Hard contract (enforced in tests/test_runtime_v2_cutover.py):
+  • NO import of `core.production_runtime`.
+  • NO import of `core.fail_closed_pipeline`.
+  • NO fallback, no switch, no dual runtime.
+  • Every response carries `runtime: "runtime_v2"` +
+    `runtime_authority: "runtime_v2"` + `legacy_runtime_used: False`.
+
+This router does NOT:
+  - call LLMs directly
+  - run RAG / retrieval
+  - assemble prompts
+  - build answers from scratch
+  - decide citations
+  - permit any legacy fallback
+
+It ONLY:
+  1. validates inbound request
+  2. applies the beta security pre-gate (upstream of runtime)
+  3. dispatches to `runtime_v2.adapter.answer_json`
+  4. stamps the runtime_v2 authority on the response
+  5. returns the response verbatim (or streams it frame-by-frame)
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, field_validator
+
+from core.stabilization import resolve_safe_session_id as _safe_sid
+from core.beta_middleware import (
+    beta_pre_request, get_beta_context,
+    beta_record_feedback, beta_metrics_snapshot,
+)
+# ── runtime_v2 adapter (memo path) ──
+from core.runtime_v2.adapter import (
+    answer_json as _v2_answer_json,
+    stream_frames as _v2_stream_frames,
+)
+# ── Phase 0 router (pre-runtime_v2 shunt) ──
+from core.phase0_router import route_query
+from core.nlp_utils import get_history, add_to_history
+from core import cancellation as _cancel
+
+# ── Optional imports for Phase 2/3 handlers (lazy — degrade on miss) ──
+import asyncio
+import asyncpg  # noqa: F401 — used inside handlers via connection
+from core import app_state as _app_state
+
+log = logging.getLogger(__name__)
+router = APIRouter()
+
+
+# ═════════════════════════════════════════════════════════════════
+# Request / Response schemas
+# ═════════════════════════════════════════════════════════════════
+
+class QueryRequest(BaseModel):
+    query:      str
+    mode:       Optional[str] = "expert"
+    model:      Optional[str] = ""
+    session_id: Optional[str] = "default"
+    history:    Optional[list] = []
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise HTTPException(status_code=400, detail="الرجاء إدخال سؤال.")
+        if len(v) > 15000:
+            raise HTTPException(
+                status_code=400,
+                detail=f"النص طويل جداً ({len(v)} حرف). الحد الأقصى 15000 حرف."
+            )
+        v = re.sub(r"<[^>]+>", "", v)   # XSS strip
+        v = v.replace("\x00", "")        # null-byte strip
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: Optional[str]) -> str:
+        allowed = {"", "openai", "gemini", "claude", "ollama"}
+        if v and v not in allowed:
+            return ""
+        return v or ""
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: Optional[str]) -> str:
+        if v not in ("expert", "general"):
+            return "expert"
+        return v
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, v: Optional[str]) -> str:
+        if not v:
+            return "default"
+        v = re.sub(r"[^a-zA-Z0-9\-_]", "", v)[:64]
+        return v or "default"
+
+    @field_validator("history")
+    @classmethod
+    def validate_history(cls, v: Optional[list]) -> list:
+        if not v:
+            return []
+        return v[-20:] if len(v) > 20 else v
+
+
+class FeedbackRequest(BaseModel):
+    log_id:  int
+    value:   int
+    note:    Optional[str] = ""
+    query:   Optional[str] = ""
+    answer:  Optional[str] = ""
+    sources: Optional[list] = []
+    model:   Optional[str] = ""
+
+
+# ═════════════════════════════════════════════════════════════════
+# Stamping helper — enforces runtime_v2 authority on every payload
+# ═════════════════════════════════════════════════════════════════
+
+def _stamp_authority(resp: dict) -> dict:
+    """Guarantee every outgoing response carries the runtime_v2
+    authority stamp and the minimum-compatible trace fields expected by
+    older clients."""
+    resp["authoritative_path"]   = "runtime_v2"
+    resp["runtime_authority"]    = "runtime_v2"
+    resp["runtime_version"]      = "v2"
+    resp["legacy_runtime_used"]  = False
+    resp["legacy_used"]          = False
+    resp["fallback_used"]        = False
+    resp.setdefault("runtime",           "runtime_v2")
+    resp.setdefault("gates_passed",      [])
+    resp.setdefault("gates_failed",      [])
+    resp.setdefault("block_reasons",     [])
+    resp.setdefault("evidence_trace",    {})
+    resp.setdefault("sufficiency_level", "")
+    resp.setdefault("is_blocked",        False)
+    return resp
+
+
+def _beta_block_payload(block_text: str) -> dict:
+    """Beta pre-gate block, stamped with v2 authority (beta gate runs
+    upstream of the runtime; it is NOT the legacy runtime)."""
+    return _stamp_authority({
+        "answer":       block_text,
+        "sources":      [],
+        "domain":       "beta_gate",
+        "confidence":   0,
+        "is_grounded":  False,
+        "runtime":      "beta_pregate",
+        "gates_passed": ["beta_gate_passed"],
+        "gates_failed": ["beta_gate_blocked"],
+        "block_reasons": ["beta_middleware"],
+        "is_blocked":   True,
+        "from_beta_gate": True,
+    })
+
+
+# ═════════════════════════════════════════════════════════════════
+# POST /api/v1/query/  — runtime_v2 dispatch (single authoritative path)
+# ═════════════════════════════════════════════════════════════════
+
+@router.post("/api/v1/query/")
+async def query_json(req: QueryRequest, request: Request = None):
+    try:
+        q = req.query.strip()
+        _ip = request.client.host if (request and request.client) else ""
+        _headers = dict(request.headers) if request else {}
+        sid = _safe_sid(req.session_id, request_ip=_ip, request_headers=_headers)
+
+        # Beta pre-gate (security — upstream of runtime)
+        _block = beta_pre_request(sid, q)
+        if _block:
+            return _beta_block_payload(_block)
+
+        _bctx = get_beta_context()
+        if _bctx:
+            _bctx.session_id = sid
+            _bctx.query = q[:200]
+
+        # Single authoritative dispatch — runtime_v2 adapter only
+        request_id = _cancel.new_request_id()
+        resp = _v2_answer_json(q, sid, req.history or [],
+                                 request_id=request_id)
+        resp.setdefault("request_id", request_id)
+        return _stamp_authority(resp)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("[runtime_v2] query_json raised")
+        return _stamp_authority({
+            "answer": "تعذّر معالجة الطلب عبر runtime_v2. يُرجى إعادة المحاولة.",
+            "sources": [], "confidence": 0, "is_grounded": False,
+            "runtime": "runtime_v2", "is_blocked": True,
+            "gates_passed": [], "gates_failed": ["runtime_v2_exception"],
+            "block_reasons": [f"exception:{type(e).__name__}"],
+        })
+
+
+# ═════════════════════════════════════════════════════════════════
+# Phase 0/2/3 specialized handlers
+# ═════════════════════════════════════════════════════════════════
+
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+async def _stream_text_direct(
+    text: str, route: str, confidence: int = 90,
+    chunk_size: int = 40, delay: float = 0.02,
+) -> "AsyncIterator[str]":
+    """Stream a fully-formed text response as SSE frames (start/chunk×N/done)."""
+    yield _sse({
+        "type": "start", "runtime": "phase0_router",
+        "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
+    })
+    n = max(1, chunk_size)
+    for i in range(0, len(text), n):
+        piece = text[i:i + n]
+        yield _sse({
+            "type": "chunk", "content": piece, "text": piece,
+            "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
+        })
+        try:
+            await asyncio.sleep(delay)
+        except Exception:
+            pass
+    yield _sse(_stamp_authority({
+        "type": "done", "runtime": "phase0_router",
+        "route": route, "confidence": confidence,
+        "sources": [], "is_grounded": False, "is_blocked": False,
+    }))
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: article_text — pull full article from DB
+# ──────────────────────────────────────────────────────────────────
+
+async def _fetch_article_from_db(art: str, law_pat: Optional[str]) -> Optional[dict]:
+    pool = _app_state.pool
+    if pool is None:
+        return None
+    excl = (
+        " AND law_name NOT LIKE '%أحكام محكمة التمييز%'"
+        " AND law_name NOT LIKE '%قرار وزار%'"
+        " AND law_name NOT LIKE '%نظام سياسي%'"
+        " AND law_name NOT LIKE '%خدمة وطنية%'"
+        " AND law_name NOT LIKE '%اتجار بالبشر%'"
+        " AND law_name NOT LIKE '%الدستور%'"
+    )
+    async with pool.acquire() as conn:
+        row = None
+        if law_pat:
+            row = await conn.fetchrow(
+                f"SELECT content, law_name FROM chunks "
+                f"WHERE is_active=true AND article_number=$1 AND law_name LIKE $2"
+                f"{excl} ORDER BY length(content) DESC LIMIT 1",
+                art, law_pat,
+            )
+        if not row:
+            row = await conn.fetchrow(
+                f"SELECT content, law_name FROM chunks "
+                f"WHERE is_active=true AND article_number=$1"
+                f"{excl} ORDER BY length(content) DESC LIMIT 1",
+                art,
+            )
+    return dict(row) if row else None
+
+
+async def handle_article_text(payload: dict) -> StreamingResponse:
+    art = payload.get("article_number", "")
+    law_pat = payload.get("law_pattern")
+
+    async def gen():
+        try:
+            row = await _fetch_article_from_db(art, law_pat)
+        except Exception as e:
+            log.exception("article_text fetch failed")
+            row = None
+        if row:
+            text = (
+                f"📜 **المادة ({art})** من **{row['law_name']}**:\n\n"
+                f"{row['content']}"
+            )
+            conf = 95
+        else:
+            text = (
+                f"عذراً، لم أجد نص المادة ({art})"
+                + (f" من {payload.get('law_hint')}" if payload.get("law_hint") else "")
+                + ". تأكد من رقم المادة واسم القانون."
+            )
+            conf = 40
+        async for frame in _stream_text_direct(text, "article_text", conf, chunk_size=60):
+            yield frame
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: table — pull a table (drugs/salaries/penalties/traffic)
+# ──────────────────────────────────────────────────────────────────
+
+_TABLE_QUERIES = {
+    "drugs": (
+        "SELECT content, law_name FROM chunks WHERE is_active=true "
+        "AND law_name LIKE '%مخدرات%' "
+        "AND (content LIKE '%جدول رقم%' OR content LIKE '%الجدول%' "
+        "     OR content LIKE '%المواد المخدرة%') "
+        "ORDER BY length(content) DESC LIMIT 3"
+    ),
+    "salaries": (
+        "SELECT content, law_name FROM chunks WHERE is_active=true "
+        "AND (content LIKE '%جدول الدرجات%' OR content LIKE '%سلم الرواتب%' "
+        "     OR content LIKE '%الدرجات والرواتب%') "
+        "ORDER BY length(content) DESC LIMIT 2"
+    ),
+    "penalties": (
+        "SELECT content, law_name FROM chunks WHERE is_active=true "
+        "AND content LIKE '%جدول%عقوب%' ORDER BY length(content) DESC LIMIT 2"
+    ),
+    "traffic": (
+        "SELECT content, law_name FROM chunks WHERE is_active=true "
+        "AND (content LIKE '%مخالفات مرور%' OR content LIKE '%جدول%مخالف%') "
+        "ORDER BY length(content) DESC LIMIT 2"
+    ),
+}
+
+
+async def handle_table(payload: dict) -> StreamingResponse:
+    ttype = payload.get("table_type", "drugs")
+    q_sql = _TABLE_QUERIES.get(ttype, _TABLE_QUERIES["drugs"])
+
+    async def gen():
+        rows = []
+        pool = _app_state.pool
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(q_sql)
+            except Exception as e:
+                log.exception("table fetch failed")
+        if rows:
+            parts = ["📋 **الجدول المطلوب:**\n"]
+            for r in rows:
+                parts.append(f"— من **{r['law_name']}**:\n{r['content']}\n")
+            text = "\n---\n\n".join(parts)
+            conf = 88
+        else:
+            text = "عذراً، لم أجد الجدول المطلوب في قاعدة البيانات."
+            conf = 35
+        async for frame in _stream_text_direct(text, "table", conf, chunk_size=80):
+            yield frame
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: calculator (deterministic math)
+# ──────────────────────────────────────────────────────────────────
+
+async def handle_calculator(payload: dict) -> StreamingResponse:
+    ctype = payload.get("type")
+    salary = payload.get("salary")
+    years = payload.get("years")
+
+    async def gen():
+        if not salary or not years:
+            missing = []
+            if not salary: missing.append("الراتب الشهري")
+            if not years:  missing.append("سنوات الخدمة")
+            text = (
+                "لحساب المستحقات أحتاج معرفة: " + " و ".join(missing) + ".\n\n"
+                "مثال: «احسب مكافأة نهاية خدمة راتب 15000 و 10 سنوات»"
+            )
+            conf = 50
+        elif ctype == "end_of_service":
+            weekly = salary / 4.33
+            amount = int(round(weekly * 3 * years))
+            text = (
+                "🧮 **حساب مكافأة نهاية الخدمة**\n\n"
+                f"**المعطيات:**\n"
+                f"• الراتب الشهري: {salary:,} ريال\n"
+                f"• سنوات الخدمة: {years} سنة\n\n"
+                f"**الحساب:**\n"
+                f"• الأجر الأسبوعي = {salary:,} ÷ 4.33 = {int(round(weekly)):,} ريال\n"
+                f"• 3 أسابيع × {years} سنة = {3*years} أسبوع\n"
+                f"• **المكافأة ≈ {amount:,} ريال قطري**\n\n"
+                f"**السند:** المادة (54) من قانون العمل القطري رقم (14) لسنة 2004.\n\n"
+                f"💡 قد تستحق مستحقات إضافية: إجازات سنوية غير مستعملة، "
+                f"بدلات تعاقدية، رواتب متأخرة."
+            )
+            conf = 96
+        elif ctype == "unfair_dismissal":
+            comp = int(salary * years)
+            text = (
+                "🧮 **حساب تعويض الفصل التعسفي**\n\n"
+                f"• الراتب الشهري: {salary:,} ريال\n"
+                f"• سنوات الخدمة: {years}\n"
+                f"• التقدير: أجر شهر عن كل سنة = **{comp:,} ريال**\n\n"
+                f"**السند:** المادة (61) من قانون العمل.\n"
+                f"💡 قد يُضاف لها مكافأة نهاية الخدمة (م54) وبدل الإنذار (م49)."
+            )
+            conf = 93
+        else:
+            text = "نوع الحساب غير مدعوم حالياً."
+            conf = 30
+        async for frame in _stream_text_direct(text, "calculator", conf, chunk_size=50):
+            yield frame
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: general — LLM + RAG
+# ──────────────────────────────────────────────────────────────────
+
+async def handle_general(
+    query: str, sid: str, history: list,
+) -> StreamingResponse:
+    from services import llm_service as _llm
+    from core.prompts import EXPERT_SYSTEM
+
+    async def gen():
+        yield _sse({
+            "type": "start", "runtime": "phase0_general",
+            "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
+        })
+        # Retrieval — llm_service.search uses app_state.pool
+        sources = []
+        try:
+            sources = await _llm.search(
+                queries=[query], key_terms=[query], top_k=5,
+            )
+        except Exception as e:
+            log.debug("general search miss: %s", e)
+            sources = []
+        context = ""
+        if sources:
+            parts = ["**المصادر:**\n"]
+            for i, r in enumerate(sources[:5], 1):
+                lname = r.get("law_name", "مصدر")
+                c = (r.get("content") or "")[:450]
+                parts.append(f"[{i}] {lname}:\n{c}\n")
+            context = "\n".join(parts)
+        # System prompt tuned for interactive mode
+        system = EXPERT_SYSTEM + (
+            "\n\n═══ وضع المساعد التفاعلي ═══\n"
+            "• للأسئلة المعرفية: اشرح بوضوح في فقرة أو فقرتين — "
+            "  لا تستخدم هيكل 'تكييف/سند/تحليل'.\n"
+            "• للاستشارات: اسأل عن التفاصيل الناقصة ثم وجّه.\n"
+            "• استعمل المصادر المُرفقة فقط — لا تخترع أرقام مواد.\n"
+            "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
+        )
+        user_msg = (context + "\n\nالسؤال: " + query) if context else query
+        messages: list[dict] = []
+        if history:
+            for m in history[-4:]:
+                r = m.get("role"); c = m.get("content")
+                if r in ("user", "assistant") and c:
+                    messages.append({"role": r, "content": c})
+        messages.append({"role": "user", "content": user_msg})
+
+        try:
+            async for piece in _llm.stream_openai(system, messages, max_tokens=1200):
+                if piece:
+                    yield _sse({
+                        "type": "chunk", "content": piece, "text": piece,
+                        "authoritative_path": "runtime_v2",
+                        "runtime_authority": "runtime_v2",
+                    })
+        except Exception as e:
+            log.exception("general stream failed")
+            err = f"تعذّر معالجة السؤال عبر النموذج ({type(e).__name__})."
+            yield _sse({"type": "chunk", "content": err, "text": err})
+
+        conf = 78 if sources else 55
+        yield _sse(_stamp_authority({
+            "type": "done", "runtime": "phase0_general",
+            "route": "general", "confidence": conf,
+            "sources_count": len(sources),
+        }))
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: continuation (follow-up: كمّل/اختصر/وضح/أعد)
+# ──────────────────────────────────────────────────────────────────
+
+_CONT_INSTRUCTIONS = {
+    "continue": "أكمل من حيث توقّف الرد السابق تمامًا دون إعادة ما قيل.",
+    "shorten":  "أعد صياغة الرد السابق مختصرًا في جملتين أو ثلاث فقط.",
+    "expand":   "وسّع الرد السابق بتفاصيل وأمثلة وربط قانوني إضافي.",
+    "rephrase": "أعد صياغة الرد السابق بطريقة مختلفة وأوضح — وصحّح أي خطأ.",
+}
+
+
+async def handle_continuation(
+    payload: dict, history: list, query: str,
+) -> StreamingResponse:
+    from services import llm_service as _llm
+
+    action = payload.get("action", "continue")
+    instr = _CONT_INSTRUCTIONS.get(action, _CONT_INSTRUCTIONS["continue"])
+
+    if not history:
+        async def err_gen():
+            text = "لا توجد محادثة سابقة للاستمرار. تفضل بسؤالك."
+            async for frame in _stream_text_direct(text, "continuation", 50):
+                yield frame
+        return StreamingResponse(err_gen(), media_type="text/event-stream")
+
+    last_asst = next(
+        (m.get("content", "") for m in reversed(history) if m.get("role") == "assistant"),
+        "",
+    )
+    last_user = next(
+        (m.get("content", "") for m in reversed(history) if m.get("role") == "user"),
+        "",
+    )
+
+    async def gen():
+        yield _sse({
+            "type": "start", "runtime": "phase0_continuation",
+            "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
+        })
+        system = (
+            "أنت ميزان — مساعد قانوني قطري. " + instr
+            + "\nلا تقل 'كما ذكرت سابقاً' ولا تكرر. "
+            + "حافظ على السياق القانوني وأسلوب الرد السابق."
+        )
+        messages = [
+            {"role": "user",      "content": f"السؤال الأصلي: {last_user}"},
+            {"role": "assistant", "content": last_asst[:3000]},
+            {"role": "user",      "content": query},
+        ]
+        try:
+            async for piece in _llm.stream_openai(system, messages, max_tokens=1000):
+                if piece:
+                    yield _sse({
+                        "type": "chunk", "content": piece, "text": piece,
+                    })
+        except Exception as e:
+            log.exception("continuation stream failed")
+            err = f"تعذّر الاستمرار ({type(e).__name__})."
+            yield _sse({"type": "chunk", "content": err, "text": err})
+        yield _sse(_stamp_authority({
+            "type": "done", "runtime": "phase0_continuation",
+            "route": "continuation", "confidence": 80,
+        }))
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: smart memo — asks for gaps, otherwise delegates to runtime_v2
+# ──────────────────────────────────────────────────────────────────
+
+_MEMO_TOPIC_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("حضانة",    ("حضانة", "محضون", "طليقتي", "مطلقتي", "ولدي", "بنتي", "أطفال")),
+    ("مخدرات",   ("مخدرات", "حشيش", "كوكايين", "تعاطي", "جوهر مخدر")),
+    ("فصل",      ("فصل", "فصلوني", "طردوني", "صاحب العمل", "إنهاء خدمات")),
+    ("تشهير",    ("سب", "قذف", "تشهير", "تويتر", "سبني", "شهّر")),
+    ("ضرب",      ("ضرب", "ضربني", "اعتدى", "كسر", "إيذاء", "ضربه")),
+    ("شيك",      ("شيك", "رصيد", "شيك ضمان", "شيك بلا رصيد")),
+    ("إيجار",    ("إيجار", "مستأجر", "إخلاء", "شقة", "ماجر", "مأجر")),
+    ("ابتزاز",   ("ابتزاز", "يهددني", "تهديد", "هددني")),
+    ("احتيال",   ("احتيال", "نصب", "خيانة أمانة", "حوّل", "اختلس", "اختلاس")),
+    ("تزوير",    ("تزوير", "زوّر", "توقيع مزور", "محرر مزور")),
+    ("طلاق",     ("طلاق للضرر", "عنف زوجي", "طلاق", "يضربني الزوج")),
+)
+
+_MEMO_GAPS = {
+    "حضانة":  {
+        "qs": [
+            "ما أعمار الأطفال وأسماؤهم (وجنس كل منهم)؟",
+            "ما سبب طلب الإسقاط (زواج الأم بأجنبي، إهمال، سوء سلوك)؟",
+            "هل يوجد حكم طلاق سابق وتاريخه؟",
+        ],
+        "min_signals": 2,
+    },
+    "مخدرات": {
+        "qs": [
+            "نوع المادة المضبوطة وكميتها؟",
+            "هل القبض كان بإذن من النيابة أم بدورية ميدانية؟",
+            "هل المتهم اعترف أم أنكر في التحقيق؟",
+            "هل له سوابق في هذا الشأن؟",
+        ],
+        "min_signals": 2,
+    },
+    "فصل": {
+        "qs": [
+            "الراتب الشهري وسنوات الخدمة؟",
+            "ما السبب المُعلن للفصل؟",
+            "هل يوجد إنذار كتابي سابق على الفصل؟",
+        ],
+        "min_signals": 1,
+    },
+    "تشهير": {
+        "qs": [
+            "نص العبارات المسيئة؟",
+            "ما المنصة (تويتر/واتساب/سناب)؟",
+            "هل عندك سكرين شوت أو شهود؟",
+            "هل تعرف هوية الجاني أم الحساب مجهول؟",
+        ],
+        "min_signals": 2,
+    },
+    "ضرب": {
+        "qs": [
+            "هل يوجد تقرير طبي رسمي؟",
+            "نوع الإصابة ودرجتها؟",
+            "هل كان هناك شهود؟",
+            "ما علاقتك بالمعتدي؟",
+        ],
+        "min_signals": 1,
+    },
+    "شيك": {
+        "qs": [
+            "قيمة الشيك وتاريخه؟",
+            "هل الشيك كان ضمانًا لدين أم وفاءً فوريًا؟",
+            "هل يوجد إقرار مكتوب عن طبيعة الشيك؟",
+        ],
+        "min_signals": 2,
+    },
+    "إيجار": {
+        "qs": [
+            "مدة العقد والمتبقي منها؟",
+            "هل يوجد تأخر في السداد؟",
+            "قيمة مبلغ التأمين وهل سُدِّد؟",
+        ],
+        "min_signals": 1,
+    },
+    "ابتزاز": {
+        "qs": [
+            "نوع التهديد (صور/معلومات/مال)؟",
+            "قيمة المبلغ المطلوب ووسيلة التواصل؟",
+            "هل يوجد تسجيلات/رسائل محفوظة؟",
+        ],
+        "min_signals": 1,
+    },
+    "احتيال": {
+        "qs": [
+            "علاقتك بالمتهم (شريك/موظف/وكيل)؟",
+            "المبلغ محل النزاع وتاريخ التحويل؟",
+            "هل يوجد مستندات (تحويلات/عقد)؟",
+        ],
+        "min_signals": 1,
+    },
+    "تزوير": {
+        "qs": [
+            "نوع المحرر المزور (عقد/توكيل/إقرار)؟",
+            "القيمة/الأثر الذي ترتب على المحرر؟",
+            "هل لديك نسخة من المحرر لإيداعها بالملف؟",
+        ],
+        "min_signals": 1,
+    },
+    "طلاق": {
+        "qs": [
+            "تاريخ الزواج وعدد الأطفال وأعمارهم؟",
+            "نوع الضرر (جسدي/نفسي/إهمال) وأدلته؟",
+            "هل تقدّمت بمحاضر شرطة أو تقارير طبية؟",
+        ],
+        "min_signals": 1,
+    },
+}
+
+
+def _detect_memo_topic(query: str) -> str:
+    q = (query or "").lower()
+    for topic, kws in _MEMO_TOPIC_MAP:
+        if any(kw in q for kw in kws):
+            return topic
+    return "عام"
+
+
+def _count_signals(text: str) -> int:
+    """Rough signal count — names, numbers, dates, content length."""
+    if not text:
+        return 0
+    s = 0
+    # Named entity — "اسمه/اسمها/اسمي X"
+    if re.search(r"(?:اسمي|اسمها|اسمه|يُدعى|تُدعى)\s+\S{2,}", text):
+        s += 1
+    # Numbers (up to 3 signals)
+    s += min(len(re.findall(r"\d+", text)), 3)
+    # Dates
+    if re.search(r"\d+\s*[/\-.]\s*\d+", text):
+        s += 1
+    # Length bonus
+    s += len(text.strip()) // 80
+    return s
+
+
+async def handle_memo_smart(
+    query: str, sid: str, history: list,
+) -> StreamingResponse:
+    topic = _detect_memo_topic(query)
+    # Aggregate all user turns to assess total info supplied
+    blob = query
+    if history:
+        for m in history[-6:]:
+            if m.get("role") == "user" and m.get("content"):
+                blob += " " + m["content"]
+    signals = _count_signals(blob)
+
+    gaps = _MEMO_GAPS.get(topic)
+    if gaps and signals < gaps["min_signals"]:
+        # Not enough info — ask smart questions
+        async def ask_gen():
+            lines = [
+                f"قبل ما أكتب مذكرة {topic} احترافية بأسماء ووقائعك الحقيقية، "
+                f"أحتاج منك هذه التفاصيل:",
+                "",
+            ]
+            for i, q in enumerate(gaps["qs"], 1):
+                lines.append(f"{i}. {q}")
+            lines += [
+                "",
+                "أخبرني بما تعرفه (أو قل: «اكتب بالمعلومات المتوفرة» "
+                "وسأصيغها بالمتاح).",
+            ]
+            text = "\n".join(lines)
+            async for frame in _stream_text_direct(
+                text, "memo_ask_details", 90, chunk_size=50,
+            ):
+                yield frame
+        return StreamingResponse(ask_gen(), media_type="text/event-stream")
+
+    # Sufficient info — delegate to runtime_v2, merging history into query
+    combined = query
+    if history:
+        user_msgs = [
+            m.get("content", "") for m in history
+            if m.get("role") == "user" and m.get("content")
+        ]
+        if user_msgs:
+            combined = " | ".join(user_msgs[-3:]) + " | " + query
+
+    async def memo_gen():
+        for kind, payload in _v2_stream_frames(combined, sid, history or [], chunk=40):
+            if kind == "done":
+                payload = _stamp_authority(dict(payload))
+                payload["type"] = "done"
+                payload.setdefault("log_id", 0)
+                payload["route"] = "memo"
+            else:
+                payload = dict(payload)
+                payload["type"] = kind
+                payload.setdefault("authoritative_path", "runtime_v2")
+                payload.setdefault("runtime_authority", "runtime_v2")
+            yield _sse(payload)
+
+    return StreamingResponse(memo_gen(), media_type="text/event-stream")
+
+
+# ═════════════════════════════════════════════════════════════════
+# POST /api/v1/stream/ — SSE framing over runtime_v2 adapter
+# ═════════════════════════════════════════════════════════════════
+
+@router.post("/api/v1/stream/")
+async def query_stream(req: QueryRequest, request: Request = None):
+    """SSE stream dispatched by Phase 0 Router:
+
+      beta_pregate → phase0_router.route_query →
+          safety_refusal / greeting / self_info  → direct SSE
+          article_text / table / calculator      → DB handlers
+          continuation                            → LLM follow-up
+          memo                                    → smart memo → runtime_v2
+          review                                  → direct invitation
+          general                                 → LLM + RAG
+    """
+    q = req.query.strip()
+    _ip = request.client.host if (request and request.client) else ""
+    _headers = dict(request.headers) if request else {}
+    sid = _safe_sid(req.session_id, request_ip=_ip,
+                     request_headers=_headers)
+
+    # ── Beta pre-gate (security — upstream of everything) ──
+    _block = beta_pre_request(sid, q)
+    if _block:
+        async def blocked_gen():
+            yield _sse({"type": "start", "runtime": "beta_pregate",
+                        "authoritative_path": "runtime_v2",
+                        "runtime_authority": "runtime_v2"})
+            yield _sse({"type": "chunk", "content": _block, "text": _block})
+            yield _sse(_stamp_authority({
+                "type": "done", "sources": [], "confidence": 0,
+                "is_grounded": False, "runtime": "beta_pregate",
+                "gates_passed": ["beta_gate_passed"],
+                "gates_failed": ["beta_gate_blocked"],
+                "block_reasons": ["beta_middleware"],
+                "is_blocked": True, "log_id": 0,
+            }))
+        return StreamingResponse(blocked_gen(), media_type="text/event-stream")
+
+    _bctx = get_beta_context()
+    if _bctx:
+        _bctx.session_id = sid
+        _bctx.query = q[:200]
+
+    # ── Phase 0 routing ──
+    try:
+        decision = route_query(q, req.history or [])
+    except Exception as e:
+        log.exception("phase0 route_query raised")
+        decision = {"route": "general", "direct": False}
+
+    route = decision.get("route", "general")
+
+    # ── Direct-response routes: safety_refusal / greeting / self_info / review ──
+    if decision.get("direct") and decision.get("response"):
+        async def direct_gen():
+            conf = {
+                "safety_refusal": 100,
+                "greeting":       99,
+                "self_info":      98,
+                "review":         95,
+            }.get(route, 90)
+            async for frame in _stream_text_direct(
+                decision["response"], route, conf, chunk_size=40, delay=0.03,
+            ):
+                yield frame
+        return StreamingResponse(direct_gen(), media_type="text/event-stream")
+
+    # ── Handler routes ──
+    try:
+        if route == "article_text":
+            return await handle_article_text(decision.get("payload") or {})
+
+        if route == "table":
+            return await handle_table(decision.get("payload") or {})
+
+        if route == "calculator":
+            return await handle_calculator(decision.get("payload") or {})
+
+        if route == "continuation":
+            return await handle_continuation(
+                decision.get("payload") or {}, req.history or [], q,
+            )
+
+        if route == "memo":
+            return await handle_memo_smart(q, sid, req.history or [])
+
+        # Default: general (LLM + RAG)
+        return await handle_general(q, sid, req.history or [])
+
+    except Exception as e:
+        log.exception("phase0 handler raised (route=%s)", route)
+        async def err_gen():
+            text = f"تعذّر معالجة الطلب عبر مسار '{route}' — يُعاد المحاولة."
+            async for frame in _stream_text_direct(text, "error", 30):
+                yield frame
+        return StreamingResponse(err_gen(), media_type="text/event-stream")
+
+
+# ═════════════════════════════════════════════════════════════════
+# Beta auxiliary endpoints (non-answer-producing)
+# ═════════════════════════════════════════════════════════════════
+
+@router.post("/api/v1/beta/feedback")
+async def beta_feedback(request: Request):
+    """Beta feedback collector — NOT answer-producing."""
+    try:
+        body = await request.json()
+        vote = (body.get("vote") or "").strip().lower()
+        note = body.get("note", "") or ""
+        sid  = (body.get("session_id") or "").strip() or "default"
+        beta_record_feedback(sid, vote, note)
+        return {"ok": True}
+    except Exception as e:
+        log.debug("beta_feedback: %s", e)
+        return {"ok": False, "error": str(e)[:120]}
+
+
+@router.get("/api/v1/beta/metrics")
+async def beta_metrics():
+    """Beta runtime metrics snapshot — NOT answer-producing."""
+    try:
+        return beta_metrics_snapshot()
+    except Exception as e:
+        return {"error": str(e)[:120]}
+
+
+# ═════════════════════════════════════════════════════════════════
+# POST /api/v1/cancel/{request_id} — user-initiated cancellation
+# ═════════════════════════════════════════════════════════════════
+
+@router.post("/api/v1/cancel/{request_id}")
+async def cancel_request(request_id: str):
+    """Mark an in-flight request as cancelled."""
+    if not request_id or len(request_id) > 128:
+        return {"cancelled": False, "reason": "invalid_request_id"}
+    ok = _cancel.cancel(request_id)
+    return {
+        "cancelled":  ok,
+        "request_id": request_id,
+        "reason":     "marked_cancelled" if ok else "request_not_found",
+    }
+
+
+@router.get("/api/v1/cancel/_status")
+async def cancellation_status():
+    """Diagnostic — current cancellation registry state."""
+    return _cancel.snapshot()

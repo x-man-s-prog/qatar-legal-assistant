@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <link rel="manifest" href="/static/manifest.json" />
+  <title>الميزان القانوني — تسجيل الدخول</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg-primary); }
+    .auth-card {
+      width: 100%; max-width: 420px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 40px 32px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .auth-logo { text-align: center; margin-bottom: 28px; }
+    .auth-logo h1 { font-size: 1.6rem; color: var(--accent); margin: 0; }
+    .auth-logo p  { color: var(--text-secondary); font-size: 0.85rem; margin: 4px 0 0; }
+    .auth-tabs { display: flex; gap: 0; margin-bottom: 24px; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--border); }
+    .auth-tab  { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-size: 0.9rem; color: var(--text-secondary); background: transparent; border: none; transition: all 0.2s; }
+    .auth-tab.active { background: var(--accent); color: #fff; font-weight: 600; }
+    .auth-form { display: flex; flex-direction: column; gap: 16px; }
+    .auth-field { display: flex; flex-direction: column; gap: 6px; }
+    .auth-field label { font-size: 0.85rem; color: var(--text-secondary); }
+    .auth-field input {
+      padding: 10px 14px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: var(--bg-secondary);
+      color: var(--text-primary); font-family: inherit; font-size: 0.95rem;
+      outline: none; transition: border-color 0.2s;
+    }
+    .auth-field input:focus { border-color: var(--accent); }
+    .auth-submit {
+      padding: 12px; border-radius: var(--radius-sm);
+      background: var(--accent); color: #fff; border: none;
+      font-family: inherit; font-size: 1rem; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s;
+      margin-top: 4px;
+    }
+    .auth-submit:hover { opacity: 0.85; }
+    .auth-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .auth-error { color: #ef4444; font-size: 0.85rem; text-align: center; display: none; }
+    .auth-success { color: #22c55e; font-size: 0.85rem; text-align: center; display: none; }
+    .guest-link { text-align: center; margin-top: 16px; }
+    .guest-link a { color: var(--text-secondary); font-size: 0.85rem; text-decoration: none; }
+    .guest-link a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="auth-card">
+  <div class="auth-logo">
+    <h1>⚖️ الميزان القانوني</h1>
+    <p>مساعد قانوني ذكي متخصص في التشريعات القطرية</p>
+  </div>
+
+  <div class="auth-tabs">
+    <button class="auth-tab active" id="tabLogin"    onclick="switchTab('login')">تسجيل الدخول</button>
+    <button class="auth-tab"        id="tabRegister" onclick="switchTab('register')">إنشاء حساب</button>
+  </div>
+
+  <!-- Login Form -->
+  <form class="auth-form" id="loginForm" onsubmit="doLogin(event)">
+    <div class="auth-field">
+      <label>البريد الإلكتروني</label>
+      <input type="email" id="loginEmail" placeholder="example@email.com" required />
+    </div>
+    <div class="auth-field">
+      <label>كلمة المرور</label>
+      <input type="password" id="loginPassword" placeholder="••••••••" required />
+    </div>
+    <div class="auth-error"   id="loginError"></div>
+    <div class="auth-success" id="loginSuccess"></div>
+    <button type="submit" class="auth-submit" id="loginBtn">دخول</button>
+  </form>
+
+  <!-- Register Form -->
+  <form class="auth-form" id="registerForm" style="display:none" onsubmit="doRegister(event)">
+    <div class="auth-field">
+      <label>البريد الإلكتروني</label>
+      <input type="email" id="regEmail" placeholder="example@email.com" required />
+    </div>
+    <div class="auth-field">
+      <label>كلمة المرور (8 أحرف على الأقل)</label>
+      <input type="password" id="regPassword" placeholder="••••••••" required minlength="8" />
+    </div>
+    <div class="auth-error"   id="regError"></div>
+    <div class="auth-success" id="regSuccess"></div>
+    <button type="submit" class="auth-submit" id="regBtn">إنشاء الحساب</button>
+  </form>
+
+  <div class="guest-link">
+    <a href="/">متابعة بدون حساب ←</a>
+  </div>
+</div>
+
+<script>
+function switchTab(tab) {
+  document.getElementById('loginForm').style.display    = tab === 'login'    ? 'flex' : 'none';
+  document.getElementById('registerForm').style.display = tab === 'register' ? 'flex' : 'none';
+  document.getElementById('tabLogin').classList.toggle('active',    tab === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', tab === 'register');
+}
+
+async function doLogin(e) {
+  e.preventDefault();
+  const btn   = document.getElementById('loginBtn');
+  const errEl = document.getElementById('loginError');
+  const sucEl = document.getElementById('loginSuccess');
+  errEl.style.display = 'none';
+  sucEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'جارٍ الدخول...';
+
+  try {
+    const res  = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email:    document.getElementById('loginEmail').value,
+        password: document.getElementById('loginPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { throw new Error(data.detail || 'خطأ في تسجيل الدخول'); }
+    // Save tokens
+    localStorage.setItem('access_token',  data.access_token);
+    localStorage.setItem('refresh_token', data.refresh_token);
+    localStorage.setItem('user_email',    data.email);
+    localStorage.setItem('user_id',       data.user_id);
+    localStorage.setItem('user_role',     data.role);
+    sucEl.textContent    = 'تم الدخول بنجاح! جارٍ التحويل...';
+    sucEl.style.display  = 'block';
+    setTimeout(() => { window.location.href = '/'; }, 800);
+  } catch (err) {
+    errEl.textContent   = err.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'دخول';
+  }
+}
+
+async function doRegister(e) {
+  e.preventDefault();
+  const btn   = document.getElementById('regBtn');
+  const errEl = document.getElementById('regError');
+  const sucEl = document.getElementById('regSuccess');
+  errEl.style.display = 'none';
+  sucEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'جارٍ الإنشاء...';
+
+  try {
+    const res  = await fetch('/api/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email:    document.getElementById('regEmail').value,
+        password: document.getElementById('regPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { throw new Error(data.detail || 'خطأ في إنشاء الحساب'); }
+    sucEl.textContent   = 'تم إنشاء الحساب! يمكنك الدخول الآن.';
+    sucEl.style.display = 'block';
+    setTimeout(() => switchTab('login'), 1500);
+  } catch (err) {
+    errEl.textContent   = err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'إنشاء الحساب';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,151 @@
+name: CI — Legal Assistant
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master, develop]
+
+env:
+  PYTHON_VERSION: "3.11"
+  IMAGE_NAME: legal-assistant
+
+jobs:
+  # ──────────────────────────────────────────────────────────
+  # خطوة 1: اختبارات الوحدة (pytest 100%)
+  # ──────────────────────────────────────────────────────────
+  test:
+    name: pytest (100% required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest — must be 100%
+        run: |
+          python -m pytest tests/ \
+            --tb=short \
+            --strict-markers \
+            -q \
+            --exitfirst
+        # يفشل تلقائياً إذا فشل أي اختبار واحد
+
+      - name: Verify 100% pass rate
+        run: |
+          RESULT=$(python -m pytest tests/ -q --tb=no 2>&1 | tail -1)
+          echo "Test result: $RESULT"
+          if echo "$RESULT" | grep -qE "failed|error"; then
+            echo "❌ فشلت الاختبارات — يُرفض الـ push"
+            exit 1
+          fi
+          echo "✅ جميع الاختبارات اجتازت"
+
+  # ──────────────────────────────────────────────────────────
+  # خطوة 2: بناء Docker Image
+  # ──────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file:    ./Dockerfile
+          push:    false
+          tags:    ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Test Docker image health
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:test .
+          # نتحقق فقط من بناء الـ image بنجاح
+          docker inspect ${{ env.IMAGE_NAME }}:test > /dev/null
+          echo "✅ Docker image بُنيت بنجاح"
+
+  # ──────────────────────────────────────────────────────────
+  # خطوة 3: فحص الكود (اختياري — لا يُوقف الـ pipeline)
+  # ──────────────────────────────────────────────────────────
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 5
+    continue-on-error: true   # لا يُوقف الـ pipeline
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 || true
+
+      - name: Run flake8 (warnings only)
+        run: |
+          flake8 . \
+            --exclude=.git,__pycache__,*.egg-info,venv,.venv \
+            --max-line-length=120 \
+            --count \
+            --statistics \
+            || echo "⚠️ تحذيرات flake8 — لن تُوقف الـ pipeline"
+
+  # ──────────────────────────────────────────────────────────
+  # ملخص النتائج
+  # ──────────────────────────────────────────────────────────
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [test, docker-build]
+    if: always()
+
+    steps:
+      - name: Report CI status
+        run: |
+          echo "═══════════════════════════════════"
+          echo "  CI Results Summary"
+          echo "═══════════════════════════════════"
+          echo "  Tests      : ${{ needs.test.result }}"
+          echo "  Docker     : ${{ needs.docker-build.result }}"
+          echo "  Commit     : ${{ github.sha }}"
+          echo "  Branch     : ${{ github.ref_name }}"
+          echo "═══════════════════════════════════"
+
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "❌ CI فشل — الاختبارات لم تكتمل بنسبة 100%"
+            exit 1
+          fi
+          if [ "${{ needs.docker-build.result }}" != "success" ]; then
+            echo "❌ CI فشل — بناء Docker فشل"
+            exit 1
+          fi
+          echo "✅ CI اكتمل بنجاح"

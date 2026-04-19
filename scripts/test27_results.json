@@ -1,0 +1,452 @@
+[
+  {
+    "id": "Q1",
+    "conf": 100,
+    "known": true,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 402
+  },
+  {
+    "id": "Q2",
+    "conf": 100,
+    "known": true,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 654
+  },
+  {
+    "id": "Q3",
+    "conf": 100,
+    "known": true,
+    "arts": 4,
+    "rul": 0,
+    "grade": "pass",
+    "len": 606
+  },
+  {
+    "id": "Q4",
+    "conf": 100,
+    "known": true,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 555
+  },
+  {
+    "id": "Q5",
+    "conf": 100,
+    "known": true,
+    "arts": 2,
+    "rul": 0,
+    "grade": "pass",
+    "len": 739
+  },
+  {
+    "id": "Q6",
+    "conf": 100,
+    "known": true,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 409
+  },
+  {
+    "id": "Q7",
+    "conf": 100,
+    "known": true,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 386
+  },
+  {
+    "id": "Q8",
+    "conf": 100,
+    "known": true,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 517
+  },
+  {
+    "id": "Q9",
+    "conf": 100,
+    "known": true,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 694
+  },
+  {
+    "id": "Q10",
+    "conf": 100,
+    "known": true,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 562
+  },
+  {
+    "id": "Q11",
+    "conf": 24,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1537
+  },
+  {
+    "id": "Q12",
+    "conf": 45,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1792
+  },
+  {
+    "id": "Q13",
+    "conf": 50,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1616
+  },
+  {
+    "id": "Q14",
+    "conf": 32,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1420
+  },
+  {
+    "id": "Q15",
+    "conf": 100,
+    "known": true,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 540
+  },
+  {
+    "id": "Q16",
+    "conf": 50,
+    "known": false,
+    "arts": 1,
+    "rul": 2,
+    "grade": "pass",
+    "len": 1288
+  },
+  {
+    "id": "Q17",
+    "conf": 24,
+    "known": false,
+    "arts": 0,
+    "rul": 2,
+    "grade": "pass",
+    "len": 1423
+  },
+  {
+    "id": "Q18",
+    "conf": 24,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1581
+  },
+  {
+    "id": "Q19",
+    "conf": 50,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1758
+  },
+  {
+    "id": "Q20",
+    "conf": 32,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1538
+  },
+  {
+    "id": "Q21",
+    "conf": 53,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 2644
+  },
+  {
+    "id": "Q22",
+    "conf": 43,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 642
+  },
+  {
+    "id": "Q23",
+    "conf": 53,
+    "known": false,
+    "arts": 1,
+    "rul": 3,
+    "grade": "pass",
+    "len": 1680
+  },
+  {
+    "id": "Q24",
+    "conf": 23,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1706
+  },
+  {
+    "id": "Q25",
+    "conf": 100,
+    "known": true,
+    "arts": 2,
+    "rul": 0,
+    "grade": "pass",
+    "len": 739
+  },
+  {
+    "id": "Q26",
+    "conf": 85,
+    "known": false,
+    "arts": 0,
+    "rul": 1,
+    "grade": "pass",
+    "len": 1302
+  },
+  {
+    "id": "Q27",
+    "conf": 85,
+    "known": false,
+    "arts": 1,
+    "rul": 1,
+    "grade": "pass",
+    "len": 1160
+  },
+  {
+    "id": "Q28",
+    "conf": 85,
+    "known": false,
+    "arts": 1,
+    "rul": 2,
+    "grade": "pass",
+    "len": 1153
+  },
+  {
+    "id": "Q29",
+    "conf": 85,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1087
+  },
+  {
+    "id": "Q30",
+    "conf": 85,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 940
+  },
+  {
+    "id": "Q31",
+    "conf": 100,
+    "known": false,
+    "arts": 0,
+    "rul": 1,
+    "grade": "pass",
+    "len": 537
+  },
+  {
+    "id": "Q32",
+    "conf": 100,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 72
+  },
+  {
+    "id": "Q33",
+    "conf": 100,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 23
+  },
+  {
+    "id": "Q34",
+    "conf": 100,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 39
+  },
+  {
+    "id": "Q35",
+    "conf": 45,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 2668
+  },
+  {
+    "id": "Q36",
+    "conf": 27,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 673
+  },
+  {
+    "id": "Q37",
+    "conf": 50,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 665
+  },
+  {
+    "id": "Q38",
+    "conf": 65,
+    "known": false,
+    "arts": 0,
+    "rul": 2,
+    "grade": "pass",
+    "len": 1455
+  },
+  {
+    "id": "Q39",
+    "conf": 72,
+    "known": false,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1614
+  },
+  {
+    "id": "Q40",
+    "conf": 59,
+    "known": false,
+    "arts": 2,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1448
+  },
+  {
+    "id": "Q41",
+    "conf": 100,
+    "known": true,
+    "arts": 3,
+    "rul": 0,
+    "grade": "pass",
+    "len": 409
+  },
+  {
+    "id": "Q42",
+    "conf": 33,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1498
+  },
+  {
+    "id": "Q43",
+    "conf": 24,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1374
+  },
+  {
+    "id": "Q44",
+    "conf": 47,
+    "known": false,
+    "arts": 1,
+    "rul": 1,
+    "grade": "pass",
+    "len": 1763
+  },
+  {
+    "id": "Q45",
+    "conf": 20,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1630
+  },
+  {
+    "id": "Q46",
+    "conf": 35,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1426
+  },
+  {
+    "id": "Q47",
+    "conf": 24,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1407
+  },
+  {
+    "id": "Q48",
+    "conf": 37,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1660
+  },
+  {
+    "id": "Q49",
+    "conf": 65,
+    "known": false,
+    "arts": 1,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1722
+  },
+  {
+    "id": "Q50",
+    "conf": 25,
+    "known": false,
+    "arts": 0,
+    "rul": 0,
+    "grade": "pass",
+    "len": 1558
+  }
+]

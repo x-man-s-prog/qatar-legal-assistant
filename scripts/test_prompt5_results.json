@@ -1,0 +1,76 @@
+[
+  {
+    "q": "هل يحق لصاحب العمل فصل الموظف بدون سبب؟",
+    "cat": "تسريب",
+    "conf": 49,
+    "eng_leak": false,
+    "answer_len": 699,
+    "status": "ok"
+  },
+  {
+    "q": "ما الفرق بين الجنحة والجناية؟",
+    "cat": "تسريب",
+    "conf": 27,
+    "eng_leak": false,
+    "answer_len": 670,
+    "status": "ok"
+  },
+  {
+    "q": "تم فصلي من العمل بعد تقديم شكوى داخلية ضد الشركة، هل يعتبر هذا فصل تعسفي؟",
+    "cat": "مركّب",
+    "conf": 100,
+    "eng_leak": false,
+    "answer_len": 654,
+    "status": "ok"
+  },
+  {
+    "q": "شخص اعتدى علي ونشر فيديو الاعتداء على الإنترنت",
+    "cat": "مركّب",
+    "status": "error",
+    "error": "timed out"
+  },
+  {
+    "q": "شريكي أخذ أموال من الشركة بدون علمي",
+    "cat": "مركّب",
+    "status": "error",
+    "error": "timed out"
+  },
+  {
+    "q": "صيغ لي عقد إيجار شقة",
+    "cat": "عقد",
+    "status": "error",
+    "error": "timed out"
+  },
+  {
+    "q": "أبي نموذج عقد عمل",
+    "cat": "عقد",
+    "conf": 0,
+    "eng_leak": false,
+    "answer_len": 77,
+    "status": "ok"
+  },
+  {
+    "q": "اكتب لي مذكرة دفاع في قضية فصل تعسفي",
+    "cat": "عقد",
+    "conf": 100,
+    "eng_leak": false,
+    "answer_len": 654,
+    "status": "ok"
+  },
+  {
+    "q": "ابي اعرف عن حقوقي في الشغل",
+    "cat": "لهجة",
+    "conf": 27,
+    "eng_leak": false,
+    "answer_len": 1405,
+    "status": "ok"
+  },
+  {
+    "q": "كيف اقدم شكوا على الكفيل",
+    "cat": "إملاء",
+    "conf": 32,
+    "eng_leak": false,
+    "answer_len": 1324,
+    "status": "ok"
+  }
+]

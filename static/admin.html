@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>لوحة مراقبة — المساعد القانوني</title>
+
+  <!-- Chart.js CDN (بدون تبعيات إضافية) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+
+  <style>
+    /* ── Reset & Variables ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-primary:   #0f1117;
+      --bg-card:      #1e2130;
+      --bg-hover:     #252840;
+      --accent:       #4f6ef7;
+      --accent-light: #6b84ff;
+      --gold:         #f0c040;
+      --success:      #22c55e;
+      --warning:      #f59e0b;
+      --error:        #ef4444;
+      --text:         #e8eaf6;
+      --text-muted:   #606880;
+      --border:       rgba(255,255,255,0.07);
+      --font:         'Segoe UI', 'Tajawal', sans-serif;
+      --radius:       12px;
+    }
+
+    html, body {
+      min-height: 100%;
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text);
+    }
+
+    /* ── Top Bar ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: #16181f;
+      border-bottom: 1px solid var(--border);
+      gap: 16px;
+    }
+    .topbar-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--gold);
+    }
+    .topbar-meta { font-size: 0.78rem; color: var(--text-muted); }
+
+    .btn {
+      padding: 7px 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 0.82rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-danger  { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+    .btn-danger:hover  { background: rgba(239,68,68,0.3); }
+    .btn-refresh { background: rgba(79,110,247,0.15); color: var(--accent-light); border: 1px solid rgba(79,110,247,0.3); }
+    .btn-refresh:hover { background: rgba(79,110,247,0.3); }
+    .btn-back    { background: transparent; color: var(--text-muted); border: 1px solid var(--border); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+
+    /* ── Layout ── */
+    .container { max-width: 1280px; margin: 0 auto; padding: 24px 20px; }
+
+    /* ── KPI Cards ── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .kpi-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.2s;
+    }
+    .kpi-card:hover { border-color: rgba(79,110,247,0.4); }
+
+    .kpi-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
+    .kpi-value { font-size: 1.8rem; font-weight: 800; color: var(--gold); line-height: 1.1; }
+    .kpi-sub   { font-size: 0.72rem; color: var(--text-muted); }
+    .kpi-card.green .kpi-value { color: var(--success); }
+    .kpi-card.yellow .kpi-value { color: var(--warning); }
+    .kpi-card.red .kpi-value   { color: var(--error); }
+
+    /* ── Charts Grid ── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .chart-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .chart-title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chart-canvas-wrap {
+      position: relative;
+      height: 220px;
+    }
+
+    /* ── Queries Tables ── */
+    .tables-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .table-card table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .table-card th {
+      text-align: right;
+      padding: 7px 10px;
+      color: var(--text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    .table-card td {
+      padding: 7px 10px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .table-card tr:last-child td { border-bottom: none; }
+    .table-card tr:hover td { background: var(--bg-hover); }
+
+    .ms-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+    .ms-fast   { background: rgba(34,197,94,0.15);  color: #4ade80; }
+    .ms-slow   { background: rgba(239,68,68,0.15);  color: #f87171; }
+
+    /* ── Provider Status ── */
+    .providers-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-bottom: 24px;
+    }
+
+    .providers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .provider-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .provider-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-ok      { background: var(--success); box-shadow: 0 0 6px #22c55e80; }
+    .dot-warn    { background: var(--warning); box-shadow: 0 0 6px #f59e0b80; }
+    .dot-error   { background: var(--error);   box-shadow: 0 0 6px #ef444480; }
+    .dot-unknown { background: var(--text-muted); }
+
+    .provider-name  { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+    .provider-status { font-size: 0.7rem; color: var(--text-muted); }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 20px;
+      font-size: 0.85rem;
+      color: var(--text);
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+
+    /* ── Loading spinner ── */
+    .loading { opacity: 0.4; font-size: 0.82rem; color: var(--text-muted); padding: 12px 0; }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; color: var(--text-muted); font-size: 0.82rem; padding: 24px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      .charts-grid { grid-template-columns: 1fr; }
+      .tables-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .kpi-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <a href="/" class="btn btn-back">← الرئيسية</a>
+    <div>
+      <div class="topbar-title">⚖️ لوحة مراقبة المساعد القانوني</div>
+      <div class="topbar-meta" id="lastUpdate">جارٍ التحميل…</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <select id="daysPicker" onchange="loadAll()" style="background:#1e2130;border:1px solid rgba(255,255,255,0.1);color:#e8eaf6;padding:6px 10px;border-radius:8px;font-size:0.82rem;cursor:pointer;">
+      <option value="1">آخر 24 ساعة</option>
+      <option value="7">آخر 7 أيام</option>
+      <option value="30">آخر 30 يوماً</option>
+    </select>
+    <button class="btn btn-refresh" onclick="loadAll()">🔄 تحديث</button>
+    <button class="btn btn-danger"  onclick="clearCache()">🗑️ تفريغ الـ Cache</button>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="container">
+
+  <!-- KPI Row -->
+  <div class="kpi-grid" id="kpiGrid">
+    <div class="kpi-card"><div class="kpi-label">إجمالي الاستعلامات</div><div class="kpi-value" id="kpiTotal">—</div><div class="kpi-sub">خلال الفترة المختارة</div></div>
+    <div class="kpi-card green"><div class="kpi-label">متوسط الاستجابة</div><div class="kpi-value" id="kpiAvgMs">—</div><div class="kpi-sub">ميلي ثانية</div></div>
+    <div class="kpi-card"><div class="kpi-label">معدل الـ Cache</div><div class="kpi-value" id="kpiCache">—</div><div class="kpi-sub">من إجمالي الاستعلامات</div></div>
+    <div class="kpi-card"><div class="kpi-label">متوسط الثقة</div><div class="kpi-value" id="kpiConf">—</div><div class="kpi-sub">من 100</div></div>
+    <div class="kpi-card yellow"><div class="kpi-label">ثقة منخفضة</div><div class="kpi-value" id="kpiLowConf">—</div><div class="kpi-sub">استعلام أقل من 60%</div></div>
+    <div class="kpi-card"><div class="kpi-label">النموذج الأبرز</div><div class="kpi-value" id="kpiProvider" style="font-size:1.1rem;padding-top:4px;">—</div><div class="kpi-sub">الأكثر استخداماً</div></div>
+  </div>
+
+  <!-- Charts Row -->
+  <div class="charts-grid">
+    <!-- Hourly Bar Chart -->
+    <div class="chart-card">
+      <div class="chart-title">📊 توزيع الاستعلامات بالساعة (آخر 24 ساعة)</div>
+      <div class="chart-canvas-wrap">
+        <canvas id="hourlyChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Confidence Donut -->
+    <div class="chart-card">
+      <div class="chart-title">🎯 توزيع مستوى الثقة</div>
+      <div class="chart-canvas-wrap">
+        <canvas id="confChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fastest / Slowest Tables -->
+  <div class="tables-grid">
+    <div class="table-card">
+      <div class="chart-title">⚡ أسرع 5 استعلامات</div>
+      <table id="fastestTable">
+        <thead><tr><th>الاستعلام</th><th>الوقت</th></tr></thead>
+        <tbody><tr><td colspan="2" class="empty">جارٍ التحميل…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="table-card">
+      <div class="chart-title">🐢 أبطأ 5 استعلامات</div>
+      <table id="slowestTable">
+        <thead><tr><th>الاستعلام</th><th>الوقت</th></tr></thead>
+        <tbody><tr><td colspan="2" class="empty">جارٍ التحميل…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Provider Status -->
+  <div class="providers-card">
+    <div class="chart-title">🔌 حالة النماذج والخدمات</div>
+    <div class="providers-grid" id="providersGrid">
+      <div class="empty">جارٍ الفحص…</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+// ─── Chart instances ────────────────────��───────────────────
+let hourlyChartInst = null;
+let confChartInst   = null;
+
+// ─── Load All Data ───────────────────────────────────────────
+async function loadAll() {
+  const days = parseInt(document.getElementById('daysPicker').value) || 1;
+  document.getElementById('lastUpdate').textContent =
+    'آخر تحديث: ' + new Date().toLocaleTimeString('ar-QA');
+
+  await Promise.all([
+    loadAnalytics(days),
+    loadHealth(),
+  ]);
+}
+
+// ─── Analytics ───────────────────────────────────────────────
+async function loadAnalytics(days) {
+  try {
+    const r    = await fetch(`/api/v1/analytics?days=${days}`);
+    const data = await r.json();
+
+    // KPIs
+    setText('kpiTotal',    data.total_queries_today ?? '—');
+    setText('kpiAvgMs',    data.avg_response_ms     ? data.avg_response_ms + ' ms' : '—');
+    setText('kpiCache',    data.cache_hit_rate       ?? '—');
+    setText('kpiConf',     data.avg_confidence       ? data.avg_confidence + '%' : '—');
+    setText('kpiLowConf',  data.low_confidence_queries ?? '—');
+    setText('kpiProvider', data.top_provider          ?? '—');
+
+    // Hourly chart
+    renderHourly(data.hourly_distribution || []);
+
+    // Confidence donut
+    renderConfidence(data.confidence_distribution || {});
+
+    // Tables
+    renderTable('fastestTable', data.fastest_queries || [], 'fast');
+    renderTable('slowestTable', data.slowest_queries || [], 'slow');
+
+  } catch (err) {
+    console.error('analytics error:', err);
+    showToast('⚠️ تعذّر تحميل التحليلات', 3000);
+  }
+}
+
+// ─── Health / Providers ──────────────────────────────────────
+async function loadHealth() {
+  try {
+    const r    = await fetch('/api/v1/health');
+    const data = await r.json();
+
+    const providers = data.llm_providers || {};
+    const dbInfo    = data.database       || {};
+    const cacheInfo = data.cache          || {};
+
+    const items = [];
+
+    // Database
+    items.push({
+      name:   'قاعدة البيانات',
+      icon:   '🗄️',
+      ok:     dbInfo.connected !== false,
+      detail: dbInfo.connected ? `${dbInfo.chunks_count ?? '—'} مقطع` : 'غير متصلة',
+    });
+
+    // Cache
+    items.push({
+      name:   'الـ Cache',
+      icon:   '⚡',
+      ok:     true,
+      detail: cacheInfo.hit_rate ?? '—',
+    });
+
+    // LLM Providers
+    const providerMeta = {
+      openai : { name: 'OpenAI GPT-4o', icon: '🤖' },
+      gemini : { name: 'Gemini Flash',  icon: '✨' },
+      claude : { name: 'Claude Sonnet', icon: '🧠' },
+      ollama : { name: 'Ollama (محلي)', icon: '⚙️' },
+    };
+    for (const [key, meta] of Object.entries(providerMeta)) {
+      const info = providers[key] || {};
+      items.push({
+        name:   meta.name,
+        icon:   meta.icon,
+        ok:     info.available === true,
+        warn:   info.available === undefined,
+        detail: info.available ? (info.model || 'متاح') : (info.available === false ? 'غير متاح' : 'غير مُعيَّن'),
+      });
+    }
+
+    const grid = document.getElementById('providersGrid');
+    grid.innerHTML = items.map(item => `
+      <div class="provider-item">
+        <div class="provider-dot ${item.ok ? 'dot-ok' : item.warn ? 'dot-warn' : 'dot-error'}"></div>
+        <div>
+          <div class="provider-name">${item.icon} ${item.name}</div>
+          <div class="provider-status">${item.detail}</div>
+        </div>
+      </div>
+    `).join('');
+
+  } catch (err) {
+    document.getElementById('providersGrid').innerHTML =
+      '<div class="empty">⚠️ تعذّر الاتصال بالخادم</div>';
+  }
+}
+
+// ─── Clear Cache ─────────────────────────────────────────────
+async function clearCache() {
+  if (!confirm('هل تريد تفريغ الـ Cache؟ لن تتمكن من التراجع.')) return;
+  try {
+    // حاول POST على مسار cache invalidate
+    const r = await fetch('/api/v1/cache/invalidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '*', clear_all: true }),
+    });
+    const data = await r.json().catch(() => ({}));
+    showToast(data.message || '✅ تم تفريغ الـ Cache', 3000);
+    await loadAll();
+  } catch (err) {
+    showToast('⚠️ تعذّر تفريغ الـ Cache', 3000);
+  }
+}
+
+// ─── Render Hourly Bar Chart ──────────────────────────────────
+function renderHourly(hourlyData) {
+  const ctx = document.getElementById('hourlyChart').getContext('2d');
+
+  // بناء labels + data للـ 24 ساعة
+  const now       = new Date();
+  const labels    = [];
+  const counts    = [];
+  const dataMap   = {};
+
+  for (const item of hourlyData) {
+    const h = new Date(item.hour);
+    const key = `${h.getUTCHours()}:00`;
+    dataMap[key] = (dataMap[key] || 0) + item.count;
+  }
+
+  for (let i = 23; i >= 0; i--) {
+    const d   = new Date(now.getTime() - i * 3600_000);
+    const key = `${d.getHours()}:00`;
+    labels.push(key);
+    counts.push(dataMap[key] || 0);
+  }
+
+  if (hourlyChartInst) hourlyChartInst.destroy();
+  hourlyChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label:           'عدد الاستعلامات',
+        data:            counts,
+        backgroundColor: 'rgba(79,110,247,0.6)',
+        borderColor:     'rgba(79,110,247,1)',
+        borderWidth:     1,
+        borderRadius:    4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          rtl: true,
+          callbacks: {
+            label: ctx => ` ${ctx.parsed.y} استعلام`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#606880', font: { size: 10 }, maxTicksLimit: 8 },
+          grid:  { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: { color: '#606880', stepSize: 1 },
+          grid:  { color: 'rgba(255,255,255,0.05)' },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+// ─── Render Confidence Donut ──────────────────────────────────
+function renderConfidence(dist) {
+  const ctx  = document.getElementById('confChart').getContext('2d');
+  const high = dist.high   || 0;
+  const med  = dist.medium || 0;
+  const low  = dist.low    || 0;
+  const total = high + med + low;
+
+  if (confChartInst) confChartInst.destroy();
+  confChartInst = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['عالية (≥80%)', 'متوسطة (60-79%)', 'منخفضة (<60%)'],
+      datasets: [{
+        data:            [high, med, low],
+        backgroundColor: ['rgba(34,197,94,0.8)', 'rgba(245,158,11,0.8)', 'rgba(239,68,68,0.8)'],
+        borderColor:     ['#22c55e', '#f59e0b', '#ef4444'],
+        borderWidth:     2,
+        hoverOffset:     8,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: '#a0a8c0',
+            padding: 12,
+            font: { size: 11 },
+          },
+        },
+        tooltip: {
+          rtl: true,
+          callbacks: {
+            label: ctx => {
+              const v   = ctx.parsed;
+              const pct = total > 0 ? Math.round(v / total * 100) : 0;
+              return ` ${v} استعلام (${pct}%)`;
+            },
+          },
+        },
+      },
+      cutout: '65%',
+    },
+  });
+}
+
+// ─── Render Query Tables ──────────────────────────────────────
+function renderTable(tableId, rows, type) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="2" class="empty">لا توجد بيانات</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td title="${escHtml(r.query)}">${escHtml(r.query || '')}</td>
+      <td><span class="ms-badge ${type === 'fast' ? 'ms-fast' : 'ms-slow'}">${r.ms} ms</span></td>
+    </tr>
+  `).join('');
+}
+
+// ─── Helpers ────────────────────────────────��────────────────
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function escHtml(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showToast(msg, duration = 3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+// ─── Auto-refresh every 60 seconds ───────────────────────────
+let _refreshTimer = null;
+function startAutoRefresh() {
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _refreshTimer = setInterval(loadAll, 60_000);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadAll();
+  startAutoRefresh();
+});
+</script>
+</body>
+</html>

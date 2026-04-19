@@ -1,0 +1,167 @@
+[
+  {
+    "num": 1,
+    "understood": true,
+    "len": 1787,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 2,
+    "understood": true,
+    "len": 1875,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 3,
+    "understood": true,
+    "len": 1309,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 4,
+    "understood": true,
+    "len": 1661,
+    "conf": 48,
+    "arts": 1,
+    "tmz": 0,
+    "linked": false,
+    "bsml": false,
+    "status": "ok"
+  },
+  {
+    "num": 5,
+    "understood": true,
+    "len": 1414,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 6,
+    "understood": true,
+    "len": 1837,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 7,
+    "understood": true,
+    "len": 1893,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 8,
+    "understood": true,
+    "len": 1651,
+    "conf": 85,
+    "arts": 2,
+    "tmz": 4,
+    "linked": true,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 9,
+    "understood": true,
+    "len": 1608,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 10,
+    "understood": true,
+    "len": 655,
+    "conf": 29,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": false,
+    "status": "ok"
+  },
+  {
+    "num": 11,
+    "understood": true,
+    "len": 1672,
+    "conf": 85,
+    "arts": 2,
+    "tmz": 2,
+    "linked": true,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 12,
+    "understood": true,
+    "len": 1740,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 13,
+    "understood": true,
+    "len": 1619,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 14,
+    "understood": true,
+    "len": 2345,
+    "conf": 85,
+    "arts": 0,
+    "tmz": 0,
+    "linked": false,
+    "bsml": true,
+    "status": "ok"
+  },
+  {
+    "num": 15,
+    "understood": true,
+    "len": 1849,
+    "conf": 85,
+    "arts": 3,
+    "tmz": 1,
+    "linked": true,
+    "bsml": true,
+    "status": "ok"
+  }
+]

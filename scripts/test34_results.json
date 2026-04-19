@@ -1,0 +1,191 @@
+[
+  {
+    "id": "Q1",
+    "conf": 34,
+    "time": 14.0,
+    "score": 4,
+    "traits": [
+      "assessment",
+      "opponent",
+      "practical",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 2601
+  },
+  {
+    "id": "Q2",
+    "conf": 33,
+    "time": 9.9,
+    "score": 5,
+    "traits": [
+      "assessment",
+      "honesty",
+      "opponent",
+      "practical",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 2458
+  },
+  {
+    "id": "Q3",
+    "conf": 85,
+    "time": 7.2,
+    "score": 3,
+    "traits": [
+      "opponent",
+      "practical",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 984
+  },
+  {
+    "id": "Q4",
+    "conf": 24,
+    "time": 11.4,
+    "score": 1,
+    "traits": [
+      "honesty"
+    ],
+    "grade": "ok",
+    "len": 1594
+  },
+  {
+    "id": "Q5",
+    "conf": 25,
+    "time": 12.3,
+    "score": 2,
+    "traits": [
+      "assessment",
+      "honesty"
+    ],
+    "grade": "good",
+    "len": 1762
+  },
+  {
+    "id": "Q6",
+    "conf": 20,
+    "time": 12.1,
+    "score": 4,
+    "traits": [
+      "assessment",
+      "honesty",
+      "practical",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 1722
+  },
+  {
+    "id": "Q7",
+    "conf": 85,
+    "time": 6.1,
+    "score": 2,
+    "traits": [
+      "opponent",
+      "practical"
+    ],
+    "grade": "good",
+    "len": 1331
+  },
+  {
+    "id": "Q8",
+    "conf": 100,
+    "time": 0.0,
+    "score": 0,
+    "traits": [],
+    "grade": "robotic",
+    "len": 409
+  },
+  {
+    "id": "Q9",
+    "conf": 44,
+    "time": 10.0,
+    "score": 3,
+    "traits": [
+      "assessment",
+      "honesty",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 1369
+  },
+  {
+    "id": "Q10",
+    "conf": 100,
+    "time": 0.0,
+    "score": 2,
+    "traits": [
+      "opponent",
+      "practical"
+    ],
+    "grade": "good",
+    "len": 669
+  },
+  {
+    "id": "Q11",
+    "conf": 18,
+    "time": 10.1,
+    "score": 3,
+    "traits": [
+      "assessment",
+      "honesty",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 1330
+  },
+  {
+    "id": "Q12",
+    "conf": 23,
+    "time": 10.2,
+    "score": 3,
+    "traits": [
+      "assessment",
+      "honesty",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 1358
+  },
+  {
+    "id": "Q13",
+    "conf": 25,
+    "time": 8.8,
+    "score": 3,
+    "traits": [
+      "honesty",
+      "opponent",
+      "practical"
+    ],
+    "grade": "lawyer",
+    "len": 1589
+  },
+  {
+    "id": "Q14",
+    "conf": 37,
+    "time": 12.1,
+    "score": 2,
+    "traits": [
+      "honesty",
+      "practical"
+    ],
+    "grade": "good",
+    "len": 1974
+  },
+  {
+    "id": "Q15",
+    "conf": 85,
+    "time": 6.8,
+    "score": 3,
+    "traits": [
+      "opponent",
+      "practical",
+      "evidence"
+    ],
+    "grade": "lawyer",
+    "len": 1172
+  }
+]

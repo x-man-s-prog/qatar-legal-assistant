@@ -1,0 +1,92 @@
+[
+  {
+    "q": "مساء الخير",
+    "expect": "تحية فقط بدون قانون",
+    "conf": 100,
+    "known": false,
+    "answer_len": 28,
+    "sources_count": 0,
+    "status": "ok"
+  },
+  {
+    "q": "ما عقوبة القيادة بدون رخصة؟",
+    "expect": "إجابة من قانون المرور أو اعتذار",
+    "conf": 25,
+    "known": false,
+    "answer_len": 619,
+    "sources_count": 3,
+    "status": "ok"
+  },
+  {
+    "q": "هل يحق لصاحب العمل فصل الموظف بدون سبب؟",
+    "expect": "إجابة من قانون العمل م61-63",
+    "conf": 49,
+    "known": false,
+    "answer_len": 900,
+    "sources_count": 5,
+    "status": "ok"
+  },
+  {
+    "q": "ما هي سن المسؤولية الجنائية في قطر؟",
+    "expect": "إجابة صحيحة أو اعتذار",
+    "conf": 17,
+    "known": false,
+    "answer_len": 1284,
+    "sources_count": 5,
+    "status": "ok"
+  },
+  {
+    "q": "هل يجوز تسجيل مكالمة بدون علم الطرف الآخر؟",
+    "expect": "قانون العقوبات أو الجرائم الإلكترونية",
+    "conf": 32,
+    "known": false,
+    "answer_len": 1194,
+    "sources_count": 4,
+    "status": "ok"
+  },
+  {
+    "q": "اشتريت سيارة واتضح فيها عيب، هل أستطيع إرجاعها؟",
+    "expect": "القانون المدني ضمان العيوب الخفية",
+    "conf": 32,
+    "known": false,
+    "answer_len": 1321,
+    "sources_count": 5,
+    "status": "ok"
+  },
+  {
+    "q": "واحد ظلمني، وش أسوي؟",
+    "expect": "سؤال توضيحي",
+    "conf": 31,
+    "known": false,
+    "answer_len": 1339,
+    "sources_count": 3,
+    "status": "ok"
+  },
+  {
+    "q": "شخص نشر صورتي بدون إذني",
+    "expect": "قانون العقوبات أو الجرائم الإلكترونية",
+    "conf": 56,
+    "known": false,
+    "answer_len": 1344,
+    "sources_count": 5,
+    "status": "ok"
+  },
+  {
+    "q": "هل يحق للشرطة تفتيش الهاتف؟",
+    "expect": "قانون الإجراءات الجنائية",
+    "conf": 32,
+    "known": false,
+    "answer_len": 1189,
+    "sources_count": 3,
+    "status": "ok"
+  },
+  {
+    "q": "ما الفرق بين الجنحة والجناية؟",
+    "expect": "قانون العقوبات م24-25",
+    "conf": 27,
+    "known": false,
+    "answer_len": 814,
+    "sources_count": 2,
+    "status": "ok"
+  }
+]

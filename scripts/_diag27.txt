@@ -1,0 +1,6 @@
+Total known_answers: 31
+Total patterns: 31
+Keys with answer but no pattern: set()
+Keys with pattern but no answer: set()
+Match test: 29/31
+Unmatched: ['الاستقالة_الفورية', 'رد_الاعتبار']

@@ -1,0 +1,62 @@
+{
+  "mission": "Overnight 7h self-improvement",
+  "started": "2026-04-07T20:41:55.765642",
+  "ended": "2026-04-07T21:03:04.159813",
+  "duration_hours": 0.35,
+  "phases": {
+    "phase1": {
+      "error": "[Errno 13] Permission denied: '/app/scripts/article_ruling_compact.json'"
+    },
+    "phase2": {
+      "new_answers": 18,
+      "topics": [
+        "تزوير",
+        "رشوة",
+        "خيانة_أمانة",
+        "حادث_مروري",
+        "جرائم_معلوماتية",
+        "إصابة_عمل",
+        "عقد_عمل_محدد",
+        "عقد_بيع",
+        "كفالة_ضمان",
+        "وكالة",
+        "مهر_صداق",
+        "عدة",
+        "إفلاس",
+        "علامة_تجارية",
+        "تظلم_إداري",
+        "جنسية",
+        "تسجيل_عقاري",
+        "غش_تجاري"
+      ]
+    },
+    "phase3": {
+      "templates_built": 12
+    },
+    "phase4": {
+      "laws_found": 30,
+      "topics_analyzed": 20
+    },
+    "phase5": {
+      "tested": 100,
+      "success": 96,
+      "fail": 4,
+      "success_rate": "96%",
+      "weak_count": 4,
+      "weak_samples": [
+        "ما هي حالات إنهاء العقد بدون إشعار؟",
+        "متى يسقط الحق في رفع الدعوى الجنائية؟",
+        "ما هو الشرط الجزائي في العقود؟",
+        "واحد ماخذ فلوسي وما يبي يردهم"
+      ]
+    }
+  },
+  "summary": {
+    "linkage_articles": "N/A",
+    "linkage_links": "N/A",
+    "new_known_answers": 18,
+    "memo_templates": 12,
+    "topics_analyzed": 20,
+    "test_success_rate": "96%"
+  }
+}

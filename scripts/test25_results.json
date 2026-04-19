@@ -1,0 +1,315 @@
+[
+  {
+    "id": "Q1",
+    "question": "ما هي حالات إنهاء العقد بدون إشعار؟",
+    "type": "known",
+    "confidence": 16,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1460,
+    "found_words": [],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "fail"
+  },
+  {
+    "id": "Q2",
+    "question": "متى يسقط الحق في رفع الدعوى الجنائية؟",
+    "type": "known",
+    "confidence": 28,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1451,
+    "found_words": [
+      "تقادم"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q3",
+    "question": "ما هو الشرط الجزائي في العقود؟",
+    "type": "known",
+    "confidence": 26,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1347,
+    "found_words": [
+      "تعويض"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q4",
+    "question": "واحد ماخذ فلوسي وما يبي يردهم",
+    "type": "known",
+    "confidence": 26,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1476,
+    "found_words": [
+      "دعوى"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q5",
+    "question": "ما عقوبة التزوير؟",
+    "type": "known",
+    "confidence": 30,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1451,
+    "found_words": [
+      "تزوير"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q6",
+    "question": "ما عقوبة الرشوة؟",
+    "type": "known",
+    "confidence": 29,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1629,
+    "found_words": [
+      "140",
+      "رشوة"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q7",
+    "question": "ما عقوبة خيانة الأمانة؟",
+    "type": "known",
+    "confidence": 32,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 649,
+    "found_words": [
+      "خيانة"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q8",
+    "question": "ما حكم الإفلاس في قطر؟",
+    "type": "known",
+    "confidence": 62,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1547,
+    "found_words": [
+      "إفلاس"
+    ],
+    "n_articles": 3,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q9",
+    "question": "كيف أسجل علامة تجارية؟",
+    "type": "known",
+    "confidence": 39,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1408,
+    "found_words": [
+      "علامة",
+      "تجارية",
+      "تسجيل"
+    ],
+    "n_articles": 1,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q10",
+    "question": "ما هي إصابة العمل وحقوقي فيها؟",
+    "type": "known",
+    "confidence": 49,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1422,
+    "found_words": [
+      "إصابة"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q11",
+    "question": "صيغ لي مذكرة دفاع في قضية ضرب — المتهم دافع عن نفس",
+    "type": "draft",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "is_known": false,
+    "answer_len": 1147,
+    "found_words": [
+      "308",
+      "دفاع شرعي"
+    ],
+    "n_articles": 2,
+    "has_blanks": true,
+    "grade": "warn"
+  },
+  {
+    "id": "Q12",
+    "question": "صيغ لي لائحة فصل تعسفي — 10 سنوات خدمة — بدون إنذا",
+    "type": "draft",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "is_known": false,
+    "answer_len": 1530,
+    "found_words": [
+      "61",
+      "54",
+      "تعسفي"
+    ],
+    "n_articles": 6,
+    "has_blanks": true,
+    "grade": "warn"
+  },
+  {
+    "id": "Q13",
+    "question": "صيغ لي مذكرة شيك بدون رصيد — الشيك كان ضمان",
+    "type": "draft",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "is_known": false,
+    "answer_len": 1204,
+    "found_words": [
+      "357",
+      "شيك",
+      "ضمان"
+    ],
+    "n_articles": 2,
+    "has_blanks": true,
+    "grade": "warn"
+  },
+  {
+    "id": "Q14",
+    "question": "صيغ لي مذكرة طعن بالتمييز — الحكم ما رد على دفوعي",
+    "type": "draft",
+    "confidence": 85,
+    "domain": "كتابة قانونية",
+    "is_known": false,
+    "answer_len": 1498,
+    "found_words": [
+      "277",
+      "تمييز",
+      "قصور"
+    ],
+    "n_articles": 4,
+    "has_blanks": true,
+    "grade": "warn"
+  },
+  {
+    "id": "Q15",
+    "question": "الكفيل طفشني بعد 8 سنين وش أسوي",
+    "type": "rag",
+    "confidence": 32,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1506,
+    "found_words": [
+      "فصل",
+      "تعسفي"
+    ],
+    "n_articles": 0,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q16",
+    "question": "واحد ناصبني بعملات رقمية مزورة",
+    "type": "rag",
+    "confidence": 49,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1826,
+    "found_words": [
+      "354",
+      "احتيال"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q17",
+    "question": "مقاول ما خلص شغلي وهرب",
+    "type": "rag",
+    "confidence": 45,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1842,
+    "found_words": [
+      "مقاولة",
+      "عقد"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q18",
+    "question": "أبي أفك رهن عقاري",
+    "type": "rag",
+    "confidence": 33,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1384,
+    "found_words": [
+      "رهن",
+      "فك"
+    ],
+    "n_articles": 1,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q19",
+    "question": "وش حكم التسوية الودية في قطر؟",
+    "type": "rag",
+    "confidence": 52,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1507,
+    "found_words": [
+      "تسوية"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  },
+  {
+    "id": "Q20",
+    "question": "حرمتي تبي خلع وأنا مب موافق وعندها تقارير ضرب",
+    "type": "rag",
+    "confidence": 44,
+    "domain": "قانوني",
+    "is_known": false,
+    "answer_len": 1675,
+    "found_words": [
+      "109",
+      "خلع"
+    ],
+    "n_articles": 2,
+    "has_blanks": false,
+    "grade": "pass"
+  }
+]

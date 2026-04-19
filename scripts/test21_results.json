@@ -1,0 +1,122 @@
+[
+  {
+    "id": "Q1",
+    "question": "صيغ لي مذكرة — واحد ضربني ودافعت عن نفسي — عندي تق",
+    "confidence": 85,
+    "articles": 4,
+    "rulings": 3,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1198
+  },
+  {
+    "id": "Q2",
+    "question": "صيغ لي لائحة فصل تعسفي — 12 سنة — راتب 20,000 — بد",
+    "confidence": 85,
+    "articles": 4,
+    "rulings": 4,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1369
+  },
+  {
+    "id": "Q3",
+    "question": "صيغ لي مذكرة تشهير إلكتروني — نشر كلام كاذب على تو",
+    "confidence": 85,
+    "articles": 2,
+    "rulings": 2,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1087
+  },
+  {
+    "id": "Q4",
+    "question": "صيغ لي مذكرة شيك بدون رصيد — الشيك ضمان",
+    "confidence": 85,
+    "articles": 4,
+    "rulings": 2,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1065
+  },
+  {
+    "id": "Q5",
+    "question": "الكفيل طفشني بعد 8 سنين وش أسوي",
+    "confidence": 24,
+    "articles": 0,
+    "rulings": 0,
+    "db_content": false,
+    "domain": "قانوني",
+    "answer_len": 1416
+  },
+  {
+    "id": "Q6",
+    "question": "حرمتي تبي خلع وأنا مب موافق",
+    "confidence": 51,
+    "articles": 3,
+    "rulings": 0,
+    "db_content": false,
+    "domain": "قانوني",
+    "answer_len": 1697
+  },
+  {
+    "id": "Q7",
+    "question": "واحد ناصبني بـ 200 ألف",
+    "confidence": 50,
+    "articles": 2,
+    "rulings": 0,
+    "db_content": true,
+    "domain": "قانوني",
+    "answer_len": 1701
+  },
+  {
+    "id": "Q8",
+    "question": "صيغ لي مذكرة قتل خطأ طبيب — العملية تمت بالبروتوكو",
+    "confidence": 85,
+    "articles": 4,
+    "rulings": 2,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1112
+  },
+  {
+    "id": "Q9",
+    "question": "شخص زوّر توكيل وباع أرضي",
+    "confidence": 26,
+    "articles": 0,
+    "rulings": 0,
+    "db_content": true,
+    "domain": "قانوني",
+    "answer_len": 1251
+  },
+  {
+    "id": "Q10",
+    "question": "واحد سوى حساب وهمي باسمي على الانستقرام",
+    "confidence": 50,
+    "articles": 2,
+    "rulings": 0,
+    "db_content": false,
+    "domain": "قانوني",
+    "answer_len": 1786
+  },
+  {
+    "id": "Q11",
+    "question": "شريكي بالشركة ياخذ فلوس بدون علمي — أبي مذكرة",
+    "confidence": 85,
+    "articles": 4,
+    "rulings": 3,
+    "db_content": true,
+    "domain": "كتابة قانونية",
+    "answer_len": 1048
+  },
+  {
+    "id": "Q12",
+    "question": "ولدي انضرب بالمدرسة وأبي أشتكي",
+    "confidence": 32,
+    "articles": 1,
+    "rulings": 0,
+    "db_content": true,
+    "domain": "قانوني",
+    "answer_len": 1444
+  }
+]

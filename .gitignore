@@ -1,0 +1,184 @@
+# ═══════════════════════════════════════════════
+# المساعد القانوني — .gitignore
+# ═══════════════════════════════════════════════
+
+# ─── Environment & Secrets (CRITICAL) ───────────
+.env
+.env.*
+!.env.example
+!.env.production.template
+*.backup
+*.backup_*
+.env.backup_*
+
+# ─── API keys protection (defense-in-depth) ─────
+**/api_key*
+**/secret*
+**/*_key.txt
+**/*_secret.txt
+
+# ─── Python ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ─── Virtual environments ──────────────────────
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ─── Testing & coverage ────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ─── Node ──────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ─── IDE & editors ─────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ─── Claude & AI tools ────────────────────────
+.claude/
+.anthropic/
+.aider*
+.cursor/
+
+# ─── Docker ───────────────────────────────────
+docker-compose.override.yml
+docker-compose.*.override.yml
+
+# ─── Databases (local/dev) ────────────────────
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+postgres_data/
+redis_data/
+
+# ─── OS files ─────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── Logs ─────────────────────────────────────
+*.log
+*.log.*
+logs/
+log/
+quality_log.jsonl
+failures.jsonl
+
+# ─── Temporary ────────────────────────────────
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# ─── Backups (project-specific) ───────────────
+*_backup/
+*_backup_*/
+backup_*/
+_backup_*/
+_backup_*.py
+main_backup.py
+_backup_argumentation_*.py
+_backup_decision_engine_*.py
+_backup_precision_*.py
+
+# ─── User data & privacy ──────────────────────
+user_memories/
+.knowledge_snapshots/
+sessions/
+conversations/
+
+# ─── Large generated data / dumps ─────────────
+full_reindex*.log
+full_reindex*.json
+deep_verify_report.json
+attachments_progress.json
+index_attachments.log
+comprehensive_audit.log
+fix_text_encoding.log
+attach_*.log
+
+# ─── Dev/experimental scripts ─────────────────
+epstein_*.py
+almeezan_downloader*.py
+laws_downloader*.py
+index_*.py
+fix_db.py
+check_*.py
+count_*.py
+debug_*.py
+deepseek_*.py
+age_verify_auto.py
+skip_law.py
+
+# ─── Server logs & misc dumps ────────────────
+server_*.txt
+reindex_out.txt
+quality_check.txt
+null
+fix_report.json
+phase14_results.json
+verify_progress.json
+test_results.json
+
+# ─── Compiled / binary ────────────────────────
+*.exe
+*.dll
+*.dylib
+*.class
+
+# ─── Reports (optional - uncomment if needed) ──
+# BENCHMARK_REPORT.md
+# IMPACT_REPORT.md
+# SYSTEM_REPORT.md
+# PHASE_4_REPORT.md
+# database_audit_report.md

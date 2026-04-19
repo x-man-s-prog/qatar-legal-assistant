@@ -1,0 +1,36 @@
+{
+  "name": "الميزان القانوني",
+  "short_name": "الميزان",
+  "description": "مساعد قانوني ذكي متخصص في التشريعات القطرية",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1a1a2e",
+  "background_color": "#0f0f1a",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "سؤال قانوني",
+      "short_name": "استشارة",
+      "description": "ابدأ استشارة قانونية جديدة",
+      "url": "/?action=new"
+    }
+  ]
+}

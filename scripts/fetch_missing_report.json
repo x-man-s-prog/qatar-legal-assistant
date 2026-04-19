@@ -1,0 +1,48 @@
+{
+  "pre_total": 36407,
+  "post_total": 37378,
+  "post_null_emb": 0,
+  "total_inserted": 971,
+  "laws": [
+    {
+      "law": "قانون رقم (40) لسنة 2004 بشأن الولاية على أموال القاصرين",
+      "law_id": "307",
+      "articles_found": 54,
+      "inserted": 51,
+      "skipped_existing": 3,
+      "errors": 0
+    },
+    {
+      "law": "قانون رقم (27) لسنة 2006 بإصدار قانون التجارة",
+      "law_id": "2572",
+      "articles_found": 885,
+      "inserted": 843,
+      "skipped_existing": 42,
+      "errors": 0
+    },
+    {
+      "law": "قانون رقم (15) لسنة 2017 بشأن المستخدمين في المنازل",
+      "law_id": "7312",
+      "articles_found": 24,
+      "inserted": 24,
+      "skipped_existing": 0,
+      "errors": 0
+    },
+    {
+      "law": "قانون رقم (19) لسنة 2005 بتنظيم مزاولة المهن الصحية",
+      "law_id": "137",
+      "articles_found": 42,
+      "inserted": 40,
+      "skipped_existing": 2,
+      "errors": 0
+    },
+    {
+      "law": "قانون رقم (8) لسنة 2017 بإصدار نظام الرعاية الصحية",
+      "law_id": "7250",
+      "articles_found": 14,
+      "inserted": 13,
+      "skipped_existing": 1,
+      "errors": 0
+    }
+  ]
+}

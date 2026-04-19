@@ -1,0 +1,1 @@
+{'n': 9, 'q': 'كيف أنفذ حكم صادر لصالحي', 'cat': 'known', 'conf': 24, 'time': 14.4, 'known': False, 'len': 1292, 'ok': False, 'reason': 'not known_answer'}

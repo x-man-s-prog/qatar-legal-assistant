@@ -1,0 +1,137 @@
+[
+  {
+    "num": 1,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 32,
+    "len": 1471
+  },
+  {
+    "num": 2,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 26,
+    "len": 1490
+  },
+  {
+    "num": 3,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 42,
+    "len": 1351
+  },
+  {
+    "num": 4,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 32,
+    "len": 1321
+  },
+  {
+    "num": 5,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 19,
+    "len": 1436
+  },
+  {
+    "num": 6,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 30,
+    "len": 1322
+  },
+  {
+    "num": 7,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 1,
+    "tmz": 0,
+    "conf": 45,
+    "len": 1472
+  },
+  {
+    "num": 8,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 27,
+    "len": 1360
+  },
+  {
+    "num": 9,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 33,
+    "len": 1397
+  },
+  {
+    "num": 10,
+    "cat": "لهجة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 32,
+    "len": 1315
+  },
+  {
+    "num": 11,
+    "cat": "صياغة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 3,
+    "conf": 85,
+    "len": 963
+  },
+  {
+    "num": 12,
+    "cat": "صياغة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 1,
+    "conf": 85,
+    "len": 1079
+  },
+  {
+    "num": 13,
+    "cat": "صياغة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 85,
+    "len": 1621
+  },
+  {
+    "num": 14,
+    "cat": "صياغة",
+    "understood": true,
+    "arts": 0,
+    "tmz": 0,
+    "conf": 85,
+    "len": 2185
+  },
+  {
+    "num": 15,
+    "cat": "صياغة",
+    "understood": true,
+    "arts": 3,
+    "tmz": 0,
+    "conf": 85,
+    "len": 1722
+  }
+]
