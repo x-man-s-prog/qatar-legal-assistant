@@ -42,6 +42,8 @@ class DomainKey(str, Enum):
     FORGERY                    = "forgery"
     BAD_CHECK                  = "bad_check"
     DIVORCE_FOR_HARM           = "divorce_for_harm"
+    # Memo-heavy domains (fourth expansion — family maintenance)
+    FAMILY_NAFAQA              = "family_nafaqa"
     UNKNOWN                    = "unknown"
 
 

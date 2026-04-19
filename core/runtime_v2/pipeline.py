@@ -385,33 +385,73 @@ def _build_generic_skeleton(
     memo = None
     drafting_mode = None
     if intent == Intent.DRAFTING:
-        from core.runtime_v2.types import (
-            PathHypothesis as _PathH, FactMarker as _FM,
-        )
-        # Synthetic path built from the family cue so the composer
-        # can render defenses and articles coherently.
-        synthetic_path = _PathH(
-            label=family_label or "المسألة محل النظر",
-            articles=(
-                "القانون القطري المنظِّم للمسألة (تُحدَّد تطبيقاته بحسب "
-                "الوقائع عند التحقيق)",
-            ),
-            markers=tuple(
-                _FM(label=f, keywords=()) for f in (user_facts[:4] or ["—"])
-            ),
-            weight=0.5,
-        )
-        drafting_mode = DraftingMode.CONDITIONAL_DRAFT
-        memo = compose_memo(
-            domain_display = family_label or "المسألة القانونية",
-            drafting_mode  = drafting_mode,
-            paths          = [synthetic_path],
-            pivots         = [],
-            evidence       = [],
-            established    = user_facts[:4],
-            missing        = missing,
-            user_facts     = user_facts,
-        )
+        # ═══ إصلاح جذري: بدل مذكرة فارغة، اسأل عن التفاصيل ═══
+        # إذا المستخدم أعطى أقل من 3 حقائق معنوية، لا تنتج مذكرة —
+        # اسأله أسئلة ذكية. هذا يمنع «يُتمسّك بتحقق عنصر اقدمها للمحكمة»
+        # وأمثاله من الكوارث.
+        meaningful_facts = [
+            f for f in (user_facts or [])
+            if f and len(f.strip()) >= 8
+        ]
+        if len(meaningful_facts) < 3:
+            ask_lines: list[str] = []
+            if family_label:
+                ask_lines.append(
+                    f"**لصياغة مذكرة {family_label} بشكل احترافي، "
+                    f"أحتاج منك التفاصيل التالية:**"
+                )
+            else:
+                ask_lines.append(
+                    "**لصياغة مذكرة قانونية احترافية، أحتاج منك "
+                    "التفاصيل التالية:**"
+                )
+            ask_lines.append("")
+            for g in missing[:6]:
+                ask_lines.append(f"• {g}")
+            ask_lines.append("")
+            if meaningful_facts:
+                ask_lines.append("**وقائع أَفَدتَ بها حتى الآن:**")
+                for f in meaningful_facts:
+                    ask_lines.append(f"  - {f}.")
+                ask_lines.append("")
+            ask_lines.append(
+                "أرسل لي هذه التفاصيل في رسالتك التالية وسأصيغ "
+                "المذكرة كاملة بمواد القانون القطري ذات الصلة وطلبات محددة."
+            )
+            # لا ننتج مذكرة — نستعمل answer_text ليحمل السؤال
+            answer_text = "\n".join(ask_lines)
+            memo = None
+            drafting_mode = None
+        else:
+            # المستخدم أعطى تفاصيل كافية — أنتج مذكرة حقيقية
+            from core.runtime_v2.types import (
+                PathHypothesis as _PathH, FactMarker as _FM,
+            )
+            # Synthetic path built from the family cue so the composer
+            # can render defenses and articles coherently.
+            synthetic_path = _PathH(
+                label=family_label or "المسألة محل النظر",
+                articles=(
+                    "القانون القطري المنظِّم للمسألة (تُحدَّد تطبيقاته بحسب "
+                    "الوقائع عند التحقيق)",
+                ),
+                markers=tuple(
+                    _FM(label=f, keywords=())
+                    for f in (meaningful_facts[:4] or user_facts[:4] or ["—"])
+                ),
+                weight=0.5,
+            )
+            drafting_mode = DraftingMode.CONDITIONAL_DRAFT
+            memo = compose_memo(
+                domain_display = family_label or "المسألة القانونية",
+                drafting_mode  = drafting_mode,
+                paths          = [synthetic_path],
+                pivots         = [],
+                evidence       = [],
+                established    = meaningful_facts[:4] or user_facts[:4],
+                missing        = missing,
+                user_facts     = user_facts,
+            )
 
     return Response(
         answer_text       = answer_text,
