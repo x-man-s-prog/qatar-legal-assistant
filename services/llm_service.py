@@ -254,6 +254,170 @@ async def stream_gemini(system: str, messages: list[dict], max_tokens: int = 300
                         pass
 
 # ══════════════════════════════════════════════════════════
+# Legal Query Expansion Map — concept → specific articles
+# Colloquial phrasing in user queries → precise legal terms
+# with article numbers that live in the Qatari law corpus.
+# ══════════════════════════════════════════════════════════
+
+_LEGAL_QUERY_EXPANSION: dict[str, list[str]] = {
+    # ── جرائم الأموال ──
+    "سرق|سرقة|يسرق": [
+        "سرقة المادة 317 عقوبات",
+        "خيانة أمانة المادة 354 عقوبات",
+        "اختلاس المادة 161 عقوبات",
+    ],
+    "موظف سرق|سرقة موظف|سرق من الشركة|سرق من العمل": [
+        "خيانة الأمانة المادة 354 عقوبات موظف",
+        "اختلاس موظف عام المادة 161 عقوبات",
+        "سرقة المادة 317 عقوبات",
+    ],
+    "خيانة أمانة|خيانة الأمانة|خان الأمانة": [
+        "خيانة الأمانة المادة 354 قانون العقوبات",
+    ],
+    "اختلاس|اختلس": [
+        "اختلاس المادة 161 قانون العقوبات موظف عام",
+    ],
+    "نصب|احتيال|نصاب|احتال": [
+        "النصب والاحتيال المادة 349 قانون العقوبات",
+        "الاستيلاء بطريق الاحتيال",
+    ],
+    "تزوير|زوّر|مزوّر": [
+        "تزوير محررات رسمية المادة 255 عقوبات",
+        "تزوير محررات عرفية المادة 260 عقوبات",
+        "استعمال محرر مزور المادة 261 عقوبات",
+    ],
+    "رشوة|رشا|ارتشاء": [
+        "الرشوة المادة 140 قانون العقوبات",
+    ],
+    "شيك بدون رصيد|شيك طاير|شيك مرتجع|شيك بدون": [
+        "شيك بدون رصيد المادة 357 قانون العقوبات",
+    ],
+
+    # ── جرائم الاعتداء ──
+    "ضرب|ضربني|اعتداء|اعتدى": [
+        "الضرب والإيذاء المادة 304 قانون العقوبات",
+        "الإيذاء العمدي المادة 305 عقوبات",
+    ],
+    "قتل|قتله|قاتل": [
+        "القتل العمد المادة 300 قانون العقوبات",
+        "القتل الخطأ المادة 308 قانون العقوبات",
+    ],
+    "تهديد|هدد|هددني": [
+        "التهديد المادة 318 قانون العقوبات",
+    ],
+
+    # ── ظروف مشددة ومخففة ──
+    "سوابق|سابقة|عود|معاود|مكرر|تكرار": [
+        "العود المادة 58 قانون العقوبات تشديد العقوبة",
+        "سوابق جنائية صحيفة الحالة الجنائية",
+    ],
+    "اعتراف|اعترف|أقر|إقرار": [
+        "الاعتراف المادة 232 قانون الإجراءات الجنائية شروط صحة",
+        "الإقرار القضائي",
+    ],
+    "دفاع شرعي|دفاع عن النفس|حق الدفاع": [
+        "الدفاع الشرعي المادة 43 قانون العقوبات إباحة",
+    ],
+
+    # ── إجراءات ──
+    "تعويض|تعويض مدني|ضرر|أضرار": [
+        "التعويض عن الضرر المادة 199 القانون المدني",
+        "الادعاء بالحق المدني المادة 20 إجراءات جنائية",
+        "دعوى التعويض المدني",
+    ],
+    "خطوات|إجراءات|كيف أرفع|ماذا أفعل|بلاغ": [
+        "إجراءات رفع الدعوى الجنائية النيابة العامة",
+        "تقديم بلاغ الشرطة",
+        "الادعاء المدني أمام المحكمة الجنائية المادة 20",
+    ],
+    "تقادم|سقوط|مدة التقادم|انقضاء الدعوى": [
+        "تقادم الدعوى الجنائية المادة 14 إجراءات جنائية",
+        "انقضاء الدعوى بمضي المدة",
+    ],
+
+    # ── رد الاعتبار ──
+    "رد الاعتبار|رد اعتبار|اعتبار قضائي|محو السوابق": [
+        "رد الاعتبار القضائي المادة 380 إجراءات جنائية",
+        "رد الاعتبار بحكم القانون المادة 384 إجراءات جنائية",
+        "محو السوابق من الصحيفة الجنائية",
+    ],
+
+    # ── قانون الأسرة ──
+    "حضانة|حاضنة|حاضن": [
+        "الحضانة المادة 166 قانون الأسرة",
+        "سن الحضانة المادة 173 قانون الأسرة",
+        "سقوط الحضانة المادة 175 قانون الأسرة",
+    ],
+    "طلاق|طلّق|طلقني|خلع|مخالعة": [
+        "الطلاق المادة 109 قانون الأسرة",
+        "الخلع المادة 120 قانون الأسرة",
+    ],
+    "نفقة|نفقة زوجة|نفقة أطفال|نفقة أولاد": [
+        "نفقة الزوجة المادة 57 قانون الأسرة",
+        "نفقة الأولاد المادة 75 قانون الأسرة",
+    ],
+    "زواج|عقد زواج|زوجة|تزوج": [
+        "عقد الزواج المادة 12 قانون الأسرة",
+        "شروط الزواج",
+    ],
+
+    # ── قانون العمل ──
+    "فصل|فصلني|فصل تعسفي|طرد|طردني": [
+        "الفصل التعسفي المادة 49 قانون العمل",
+        "إنهاء عقد العمل بدون سبب",
+        "التعويض عن الفصل التعسفي",
+    ],
+    "مكافأة نهاية الخدمة|مكافأة خدمة|نهاية خدمة": [
+        "مكافأة نهاية الخدمة المادة 54 قانون العمل",
+    ],
+    "راتب|أجر|رواتب متأخرة": [
+        "الأجر المادة 26 قانون العمل",
+        "تأخر صرف الراتب",
+    ],
+    "إجازة|إجازات|إجازة سنوية": [
+        "الإجازة السنوية المادة 37 قانون العمل",
+    ],
+    "استقالة|استقلت|قدمت استقالتي": [
+        "الاستقالة المادة 49 قانون العمل إنهاء العقد",
+        "مدة الإخطار",
+    ],
+    "شهادة خبرة|شهادة عمل": [
+        "شهادة الخبرة المادة 50 قانون العمل",
+    ],
+}
+
+
+def _expand_legal_query(query: str) -> list[str]:
+    """Expand a natural-language legal query into precise legal phrases
+    that carry specific article numbers. Each expansion is a short
+    query suitable for hybrid search.
+
+    Example: "موظف سرق وعنده سوابق واعترف"
+        → ["خيانة الأمانة المادة 354 عقوبات موظف",
+           "العود المادة 58 قانون العقوبات تشديد العقوبة",
+           "الاعتراف المادة 232 قانون الإجراءات الجنائية شروط صحة"]
+    """
+    q_lower = (query or "").lower()
+    expansions: list[str] = []
+    matched_keys: set[str] = set()
+    # Longest key groups first (more specific match wins)
+    sorted_keys = sorted(
+        _LEGAL_QUERY_EXPANSION.keys(), key=lambda k: -len(k),
+    )
+    for key_group in sorted_keys:
+        if key_group in matched_keys:
+            continue
+        for trigger in (t.strip() for t in key_group.split("|")):
+            if trigger and trigger in q_lower:
+                matched_keys.add(key_group)
+                for exp in _LEGAL_QUERY_EXPANSION[key_group]:
+                    if exp not in expansions:
+                        expansions.append(exp)
+                break
+    return expansions[:8]
+
+
+# ══════════════════════════════════════════════════════════
 # Chain of Thought — تفكير داخلي
 # ══════════════════════════════════════════════════════════
 def rule_based_cot(q: str) -> dict:
@@ -296,6 +460,19 @@ def rule_based_cot(q: str) -> dict:
         if syn_q not in queries:
             queries.append(syn_q)
 
+    # ═══ Legal Query Expansion — colloquial → specific articles ═══
+    legal_expansions = _expand_legal_query(q)
+    if legal_expansions:
+        for exp in legal_expansions[:3]:
+            if exp not in queries:
+                queries.append(exp)
+        log.info(
+            "legal_expansion: %d for '%s': %s",
+            len(legal_expansions),
+            q[:40],
+            [e[:45] for e in legal_expansions[:3]],
+        )
+
     complexity = "معقد" if len(kws) >= 5 else "بسيط" if len(kws) <= 2 else "متوسط"
     law_areas = [domain_ar] if domain_ar else []
 
@@ -324,7 +501,7 @@ def rule_based_cot(q: str) -> dict:
     log.info("rule_based_cot: domain=%s, queries=%d, kws=%s, fixed=%s, clarif=%s",
              domain, len(queries), kws[:3], fixed_phrases[:2], needs_clarif)
     return {
-        "search_queries": queries[:5],
+        "search_queries": queries[:8],
         "law_areas": law_areas,
         "complexity": complexity,
         "legal_characterization": legal_char,
@@ -805,6 +982,58 @@ async def _enrich_with_fts(conn, query_text: str, existing: list[dict], top_k: i
         return existing
 
 
+
+# ══════════════════════════════════════════════════════════
+# Domain-aware boosting — rerank chunks by legal domain match
+# ══════════════════════════════════════════════════════════
+
+_DOMAIN_LAW_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "criminal":       ("قانون العقوبات", "الإجراءات الجنائية", "الإجراءات الجزائية",
+                       "مكافحة المخدرات", "جرائم إلكترونية", "الجرائم الإلكترونية"),
+    "procedural":     ("الإجراءات الجنائية", "الإجراءات الجزائية", "قانون المرافعات"),
+    "labor":          ("قانون العمل",),
+    "family":         ("قانون الأسرة", "الأحوال الشخصية"),
+    "civil":          ("القانون المدني",),
+    "commercial":     ("قانون التجارة", "قانون الشركات", "الإفلاس"),
+    "property":       ("الملكية", "التسجيل العقاري", "الإيجار"),
+    "administrative": ("إداري", "إدارية", "الخدمة المدنية"),
+}
+
+
+def _domain_boost(chunks: list[dict], domain: str | None) -> list[dict]:
+    if not domain or not chunks:
+        return chunks
+    accept_kws = _DOMAIN_LAW_KEYWORDS.get(domain, ())
+    if not accept_kws:
+        return chunks
+    # every other domain's keywords = reject set
+    reject_kws: list[str] = []
+    for d, kws in _DOMAIN_LAW_KEYWORDS.items():
+        if d != domain:
+            reject_kws.extend(kws)
+    for ch in chunks:
+        law = (ch.get("law_name", "") or "")
+        ch_domain = (ch.get("domain", "") or "").lower()
+        is_matching = (
+            ch_domain == domain
+            or any(kw in law for kw in accept_kws)
+        )
+        is_wrong_domain = (
+            not is_matching
+            and any(kw in law for kw in reject_kws)
+        )
+        try:
+            score = float(ch.get("score", 0) or 0)
+        except Exception:
+            score = 0.0
+        if is_matching:
+            ch["score"] = min(1.0, score + 0.25)
+        elif is_wrong_domain:
+            ch["score"] = max(0.0, score - 0.35)
+    chunks.sort(key=lambda x: float(x.get("score", 0) or 0), reverse=True)
+    return chunks
+
+
 async def search(queries: list[str], key_terms: list[str], top_k: int = 15,
                  domain: str | None = None) -> list[dict]:
     if not app_state.pool:
@@ -947,12 +1176,16 @@ async def search(queries: list[str], key_terms: list[str], top_k: int = 15,
             ordered = (phrase_first + kw_second + rest)[:top_k]
             # ── إثراء اختياري بـ FTS (Search Service) ──
             ordered = await _enrich_with_fts(conn, queries[0], ordered, top_k, domain=domain)
+            # ── Domain-aware boosting ──
+            ordered = _domain_boost(ordered, domain)
             return ordered
 
         merged = merge(list(all_vec.values()), kw_res, top_k)
         merged = _deduplicate_law_versions(merged)
         # ── إثراء اختياري بـ FTS (Search Service) ──
         merged = await _enrich_with_fts(conn, queries[0], merged, top_k, domain=domain)
+        # ── Domain-aware boosting ──
+        merged = _domain_boost(merged, domain)
         return merged
 
 # ══════════════════════════════════════════════════════════

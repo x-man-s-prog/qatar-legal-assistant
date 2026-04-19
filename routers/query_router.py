@@ -593,6 +593,32 @@ async def handle_general(
                         and "بلاغ" not in source_text:
                     supp.append("إجراءات رفع الدعوى الجنائية بلاغ نيابة")
 
+                # ═══ Legal-expansion-driven gap filling ═══
+                # Pull concept-to-article expansions from llm_service and
+                # queue any whose core tokens are not yet in source_text.
+                try:
+                    from services.llm_service import _expand_legal_query
+                    for exp in _expand_legal_query(query)[:6]:
+                        exp_norm = exp.lower()
+                        core_tokens = [
+                            t for t in exp_norm.split()
+                            if len(t) >= 3 and t not in ("قانون", "المادة")
+                        ][:2]
+                        if not core_tokens:
+                            continue
+                        # already covered if any core token + a digit from
+                        # the expansion appear together in sources?
+                        digits = [
+                            t for t in exp_norm.split() if t.isdigit()
+                        ]
+                        covered = any(
+                            (d in source_text for d in digits)
+                        ) if digits else False
+                        if not covered and exp not in supp:
+                            supp.append(exp)
+                except Exception as _ee:
+                    log.debug("legal_expansion hook: %s", _ee)
+
                 if supp:
                     log.info("supplementary search: %d queries", len(supp))
                     try:
