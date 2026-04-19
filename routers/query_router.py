@@ -539,8 +539,9 @@ async def handle_general(
         sources = []
         if not is_short_followup:
             try:
+                # M2: increased top_k from 10 → 18 for fuller coverage
                 sources = await _llm.search(
-                    queries=[query], key_terms=[query], top_k=10,
+                    queries=[query], key_terms=[query], top_k=18,
                     domain=query_domain,
                 )
             except Exception as e:
@@ -552,15 +553,98 @@ async def handle_general(
                 except Exception as e:
                     log.debug("domain filter miss: %s", e)
 
+            # M3: Supplementary search for missing topics in complex queries
+            if sources and len(query.split()) >= 8:
+                q_lower = query.lower()
+                source_text = " ".join(
+                    (ch.get("content", "") or "") for ch in sources
+                ).lower()
+                supp: list[str] = []
+
+                # سوابق / عود → م58 (تشديد العقوبة في حالة العود)
+                if any(w in q_lower for w in ["سوابق", "عود", "سبق"]) \
+                        and "58" not in source_text \
+                        and "تشديد" not in source_text \
+                        and "عود" not in source_text:
+                    supp.append("المادة 58 عقوبات العود تشديد العقوبة")
+
+                # تعويض مدني → م199 القانون المدني + إجراءات الحق المدني
+                if any(w in q_lower for w in ["تعويض", "مدني"]) \
+                        and "تعويض" not in source_text \
+                        and "199" not in source_text:
+                    supp.append("التعويض المدني الضرر المادة 199")
+
+                # اعتراف → شروط صحة الاعتراف (م232 إجراءات جنائية)
+                if any(w in q_lower for w in ["اعتراف", "اعترف"]) \
+                        and "اعتراف" not in source_text \
+                        and "إقرار" not in source_text:
+                    supp.append("الاعتراف شروط صحة الاعتراف إجراءات جنائية")
+
+                # موظف + سرقة → خيانة أمانة (م354)
+                if "موظف" in q_lower and any(w in q_lower for w in ["سرق", "سرقة"]) \
+                        and "خيانة" not in source_text \
+                        and "أمانة" not in source_text \
+                        and "354" not in source_text:
+                    supp.append("خيانة الأمانة المادة 354 عقوبات موظف")
+
+                # خطوات/إجراءات جنائية
+                if any(w in q_lower for w in ["خطوات", "إجراء", "ماذا أفعل"]) \
+                        and "نيابة" not in source_text \
+                        and "بلاغ" not in source_text:
+                    supp.append("إجراءات رفع الدعوى الجنائية بلاغ نيابة")
+
+                if supp:
+                    log.info("supplementary search: %d queries", len(supp))
+                    try:
+                        existing_keys = {
+                            (s.get("law_name"), s.get("article_number"))
+                            for s in sources
+                        }
+                        for sq in supp[:3]:
+                            try:
+                                from core.nlp_utils import extract_kw as _ek
+                                extra_kw = _ek(sq)
+                            except Exception:
+                                extra_kw = [sq]
+                            try:
+                                extra = await _llm.search(
+                                    [sq], extra_kw, top_k=5,
+                                    domain=query_domain,
+                                )
+                            except Exception as e:
+                                log.debug("supp sub-search failed: %s", e)
+                                continue
+                            if not extra:
+                                continue
+                            for ch in extra[:3]:
+                                key = (ch.get("law_name"),
+                                        ch.get("article_number"))
+                                if key not in existing_keys:
+                                    sources.append(ch)
+                                    existing_keys.add(key)
+                    except Exception as e:
+                        log.warning("supplementary search wrapper: %s", e)
+
+        # M4: detect whether query is complex (needs 5-step deep analysis)
+        # or simple (short concise answer).
+        _q_words = len((query or "").split())
+        _is_complex = _q_words >= 8 or any(
+            w in (query or "").lower()
+            for w in ["ماذا أفعل", "ما هي الخطوات", "هل يحق",
+                      "عندي قضية", "عندي مشكلة", "موكلي",
+                      "ما العقوبة المتوقعة", "كيف أرفع"]
+        )
+
         # ── Structured user_msg with cited source blocks ──
         if sources:
             context_parts: list[str] = []
-            for i, ch in enumerate(sources[:8], 1):
+            # M2: include up to 12 sources (was 8) with 900-char windows (was 600)
+            for i, ch in enumerate(sources[:12], 1):
                 law   = ch.get("law_name", "") or ""
                 art   = ch.get("article_number", "") or ""
                 lnum  = ch.get("law_number", "") or ""
                 lyear = ch.get("law_year", "")   or ""
-                cont  = (ch.get("content", "") or "")[:600]
+                cont  = (ch.get("content", "") or "")[:900]
 
                 header = f"[مصدر {i}]"
                 if law:
@@ -574,16 +658,39 @@ async def handle_general(
                 context_parts.append(f"{header}\n{cont}")
 
             rag_context = "\n---\n".join(context_parts)
+
+            # M4: different instruction block for complex vs simple queries
+            if _is_complex:
+                instructions = (
+                    "═══ تعليمات التحليل العميق (سؤال مركّب) ═══\n"
+                    "طبّق المنهجية الخماسية بالترتيب:\n"
+                    "1. **التكييف القانوني**: حدّد الوصف الدقيق للواقعة. "
+                    "إن احتملت وصفاً أكثر من واحد (سرقة / خيانة أمانة / اختلاس / احتيال) — "
+                    "اذكرها وحدّد الأرجح.\n"
+                    "2. **النصوص المنطبقة**: اذكر كل مادة ذات صلة من النصوص أعلاه — "
+                    "المادة الأساسية + مواد الظروف المشددة/المخففة + مواد الإجراءات.\n"
+                    "3. **التحليل التطبيقي**: افتح بـ «في حالتك:» وطبّق النصوص "
+                    "على تفاصيل السؤال (المبالغ، السوابق، الاعتراف...).\n"
+                    "4. **التوقعات**: العقوبة (حد أدنى/أقصى)، احتمال التشديد "
+                    "ولماذا، المدة المتوقعة للإجراءات.\n"
+                    "5. **التوصيات العملية**: خطوات مرقمة (بلاغ → تحقيق → ...)، "
+                    "مستندات مطلوبة، مواعيد تقادم/طعن.\n\n"
+                    "قواعد:\n"
+                    "• لا تكتفِ بذكر المواد — طبّقها.\n"
+                    "• كل حكم = مادة + قانون + رقمه + سنته.\n"
+                    "• استخرج أقصى ما يمكن من النصوص أعلاه قبل أن تقول 'لم أجد'.\n"
+                )
+            else:
+                instructions = (
+                    "═══ تعليمات (سؤال بسيط) ═══\n"
+                    "أجب في فقرة أو فقرتين مع المادة/القانون من النصوص أعلاه.\n"
+                    "لا تطبّق الهيكل الخماسي على السؤال البسيط.\n"
+                )
+
             user_msg = (
                 "═══ النصوص القانونية المسترجعة من قاعدة البيانات ═══\n\n"
                 + rag_context
-                + "\n\n═══ تعليمات ═══\n"
-                + "• ابنِ إجابتك من النصوص أعلاه — حتى لو لم تكن إجابة مباشرة حرفية.\n"
-                + "• ابحث في النصوص عن: أرقام مواد، مدد، شروط، عقوبات، تعاريف.\n"
-                + "• اقتبس النصوص ذات الصلة مع ذكر القانون ورقم المادة.\n"
-                + "• إذا وجدت معلومة جزئية — استعملها وأشر إلى مصدرها.\n"
-                + "• لا تقل 'لم أجد' إلا إذا كانت النصوص أعلاه بلا صلة تامة بالموضوع.\n"
-                + "• إذا كان السياق يشمل قوانين مختلفة، اختر الأنسب للسؤال وتجاهل البقية.\n\n"
+                + "\n\n" + instructions + "\n"
                 + f"═══ سؤال المستخدم ═══\n{query}"
             )
         else:
@@ -639,9 +746,14 @@ async def handle_general(
                     messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_msg})
 
+        # M5: dynamic max_tokens — 2200 for complex, 1200 for simple
+        _max_tok = 2200 if _is_complex else 1200
+
         # ── Stream ──
         try:
-            async for piece in _llm.stream_openai(system, messages, max_tokens=1400):
+            async for piece in _llm.stream_openai(
+                system, messages, max_tokens=_max_tok,
+            ):
                 if piece:
                     yield _sse({
                         "type": "chunk", "content": piece, "text": piece,

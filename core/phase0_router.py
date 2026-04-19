@@ -244,18 +244,38 @@ def detect_table(query: str) -> Optional[str]:
 
 def detect_calculator(query: str) -> Optional[Dict[str, Any]]:
     q = (query or "").strip().lower()
+
+    # Disambiguators — if the query is asking for LEGAL ANALYSIS (not
+    # just a calculation), do NOT route to calculator. These phrases
+    # mean the user wants advice, counsel, or a full case review.
+    _ANALYTICAL_MARKERS = (
+        "ما حقوقي", "ماحقوقي", "حقوقي القانونية",
+        "ماذا أفعل", "وش اسوي", "ما هي الخطوات", "ما الخطوات",
+        "فصلني", "فصلوني", "طردني", "طردوني", "سرحني",
+        "صاحب العمل", "لم يعطني", "ما أعطاني", "ما اعطاني",
+        "شهادة خبرة", "شهادة الخبرة", "بدون سبب", "بدون انذار",
+        "هل يحق", "هل يجوز", "هل استحق",
+    )
+    if any(m in q for m in _ANALYTICAL_MARKERS):
+        return None
+
     calc_type: Optional[str] = None
     # End-of-service: catch "احسب / كيف تحسب / كيف أحسب / حساب" + مكافأة
     if re.search(
         r"(?:احسب|حساب|كيف\s+(?:ا|ت|ن)?حسب|كم)\s+(?:لي\s+)?(?:كم\s+)?(?:ال)?(?:مكافأة|مكافاه)",
         q,
-    ) or re.search(
-        r"(?:مكافأة|مكافاه)\s+نهاي[ةه]\s+(?:ال)?خدم[ةه]", q,
-    ) and re.search(r"\d", q):
+    ):
         calc_type = "end_of_service"
-    # Unfair-dismissal compensation
+    # مكافأة نهاية الخدمة + أرقام، فقط إذا ليس فيه أي analytical marker
     elif re.search(
-        r"(?:احسب|حساب|كيف\s+(?:ا|ت|ن)?حسب|كم)\s+(?:لي\s+)?تعويض", q,
+        r"(?:مكافأة|مكافاه)\s+نهاي[ةه]\s+(?:ال)?خدم[ةه]", q,
+    ) and re.search(r"\d", q) and (
+        q.startswith("احسب") or q.startswith("كم ") or q.startswith("احسبلي")
+    ):
+        calc_type = "end_of_service"
+    # Unfair-dismissal compensation — explicit احسب تعويض
+    elif re.search(
+        r"(?:احسب|حساب|كيف\s+(?:ا|ت|ن)?حسب)\s+(?:لي\s+)?تعويض", q,
     ):
         calc_type = "unfair_dismissal"
     if not calc_type:
