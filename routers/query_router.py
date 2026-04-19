@@ -65,6 +65,107 @@ router = APIRouter()
 
 
 # ═════════════════════════════════════════════════════════════════
+# Answer Memory — Redis-backed session-scoped fact store
+# Stores article numbers + law names mentioned in every assistant
+# reply so future turns can stay consistent with them.
+# ═════════════════════════════════════════════════════════════════
+import re as _re_mem
+try:
+    import redis as _redis_mod
+except Exception:
+    _redis_mod = None
+
+_REDIS_HOST = "legal_redis"
+_REDIS_PORT = 6379
+_REDIS_DB = 2
+_REDIS_TTL = 3600  # 1 hour
+
+_ART_MEM_RE = _re_mem.compile(r"(?:المادة|مادة|م)\s*\(?\s*(\d+)\s*\)?")
+_LAW_MEM_RE = _re_mem.compile(
+    r"قانون\s+[\u0621-\u064a\s]+?(?=\s+(?:رقم|المادة|،|\.|$))"
+)
+
+
+def _get_redis():
+    if _redis_mod is None:
+        return None
+    try:
+        r = _redis_mod.Redis(
+            host=_REDIS_HOST, port=_REDIS_PORT,
+            db=_REDIS_DB, decode_responses=True,
+            socket_connect_timeout=1.0, socket_timeout=1.0,
+        )
+        r.ping()
+        return r
+    except Exception:
+        return None
+
+
+def _store_answer_facts(sid: str, answer: str, query: str) -> None:
+    """Extract article numbers + law names from `answer`, push a
+    compact fact record onto a Redis list keyed by session_id."""
+    if not sid or not answer:
+        return
+    r = _get_redis()
+    if r is None:
+        return
+    articles = list(dict.fromkeys(_ART_MEM_RE.findall(answer)))[:10]
+    laws = list(dict.fromkeys(_LAW_MEM_RE.findall(answer)))[:5]
+    if not articles and not laws:
+        return
+    fact = {
+        "query":    (query or "")[:200],
+        "articles": articles,
+        "laws":     [l.strip() for l in laws],
+        "summary":  (answer or "")[:400],
+        "ts":       int(__import__("time").time()),
+    }
+    try:
+        key = f"answer_memory:{sid}"
+        r.lpush(key, json.dumps(fact, ensure_ascii=False))
+        r.ltrim(key, 0, 4)        # keep last 5 answers
+        r.expire(key, _REDIS_TTL)
+    except Exception as e:
+        log.debug("answer_memory store: %s", e)
+
+
+def _retrieve_answer_facts(sid: str) -> str:
+    """Return a short prompt-friendly block listing the articles the
+    assistant has already cited in this session. Used inside the
+    system prompt so the LLM stays consistent."""
+    if not sid:
+        return ""
+    r = _get_redis()
+    if r is None:
+        return ""
+    try:
+        items = r.lrange(f"answer_memory:{sid}", 0, 4)
+    except Exception:
+        return ""
+    if not items:
+        return ""
+    lines: list[str] = []
+    for raw in items:
+        try:
+            f = json.loads(raw)
+        except Exception:
+            continue
+        arts = f.get("articles") or []
+        if arts:
+            q_snip = (f.get("query") or "")[:70]
+            arts_str = "، ".join(f"م{a}" for a in arts[:6])
+            lines.append(f"  - ذكرت سابقاً: {arts_str}  (رداً على: «{q_snip}»)")
+    if not lines:
+        return ""
+    return (
+        "\n\n═══ حقائق ذكرتها في إجاباتك السابقة خلال هذه الجلسة ═══\n"
+        + "\n".join(lines)
+        + "\n• كن متسقاً مع هذه المواد — لا تنفِ وجودها ولا تناقضها.\n"
+        + "• عند إعادة طرح نفس الموضوع، ابنِ على ما ذكرته سابقاً.\n═══\n"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════
 # Request / Response schemas
 # ═════════════════════════════════════════════════════════════════
 
@@ -529,12 +630,61 @@ async def handle_general(
         except Exception as e:
             log.debug("domain detect miss: %s", e)
 
+        # ── Context-Aware Continuation detector ──
+        # A followup is a short question whose real meaning requires
+        # the prior answer. When detected we SKIP RAG entirely — a fresh
+        # vector search on "اختصر" / "كم المدد" retrieves random chunks
+        # about unrelated topics (vacations, durations in labor law)
+        # which contaminate the answer.
+        _FOLLOWUP_PATTERNS = (
+            "اختصر", "اختصرها", "اختصر لي", "باختصار",
+            "كمّل", "كمل", "أكمل", "اكمل", "تابع",
+            "وضّح", "وضح", "وضح أكثر", "فصّل", "فصل أكثر",
+            "بدون تفصيل", "بدون فلسفة", "بدون اطالة",
+            "أقصد", "اقصد", "أقصد رسالتك", "رسالتك السابقة",
+            "هل أنت متأكد", "متأكد", "هل انت متاكد",
+            "كم المدد", "كم المدة", "كم المدد بدون",
+            "يعني", "يعني كيف", "يعني ماذا",
+            "نفس الموضوع", "نفس السؤال",
+            "لا غلط", "مو هذا قصدي", "ليس هذا قصدي",
+            "مش هذا", "مو كذا",
+        )
+        _is_followup = False
+        _last_assistant = ""
+        _last_user_q = ""
+        if history and len(history) >= 2:
+            q_lower = (query or "").lower().strip()
+            q_words = len((query or "").split())
+            is_short = q_words <= 10
+            matches_pattern = any(p in q_lower for p in _FOLLOWUP_PATTERNS)
+            starts_with_conj = q_lower.startswith((
+                "و ", "ثم ", "لكن ", "بس ", "طيب ",
+                "هل و", "وهل", "وماذا", "وكيف",
+            ))
+            if is_short and (matches_pattern or starts_with_conj):
+                _is_followup = True
+                # Extract last assistant + last user query from history
+                for m in reversed(history):
+                    if m.get("role") == "assistant" and not _last_assistant:
+                        _last_assistant = m.get("content", "") or ""
+                    elif m.get("role") == "user" and not _last_user_q:
+                        _last_user_q = m.get("content", "") or ""
+                    if _last_assistant and _last_user_q:
+                        break
+                log.info(
+                    "followup detected: q=%r words=%d pattern=%s conj=%s",
+                    (query or "")[:40], q_words,
+                    matches_pattern, starts_with_conj,
+                )
+
         # ── Retrieval + domain filter ──
         # Skip RAG for SHORT follow-up queries when history exists —
         # the answer is already in the conversation, not in the DB.
+        # _is_followup (smarter) takes precedence over the older
+        # is_short_followup (word-count only).
         is_short_followup = (
-            bool(history) and
-            len((query or "").split()) <= 6
+            _is_followup
+            or (bool(history) and len((query or "").split()) <= 6)
         )
         sources = []
         if not is_short_followup:
@@ -690,14 +840,65 @@ async def handle_general(
                     except Exception as e:
                         log.warning("supplementary search wrapper: %s", e)
 
-        # M4: detect whether query is complex (needs 5-step deep analysis)
-        # or simple (short concise answer).
+        # ═══ Smart Complexity Detector (M4 — upgraded) ═══
+        # Not every long query is complex. "ما الفرق بين الجنحة
+        # والجناية في القانون القطري وما العقوبات المقررة لكل منهما"
+        # is conceptual (simple) — should NOT trigger 5-step methodology.
+        # "عندي موظف سرق 50K واعترف وعنده سوابق" IS complex.
+        _q_lower = (query or "").lower()
         _q_words = len((query or "").split())
-        _is_complex = _q_words >= 8 or any(
-            w in (query or "").lower()
-            for w in ["ماذا أفعل", "ما هي الخطوات", "هل يحق",
-                      "عندي قضية", "عندي مشكلة", "موكلي",
-                      "ما العقوبة المتوقعة", "كيف أرفع"]
+
+        # Strong "simple / conceptual" markers (definition, comparison,
+        # single-fact question). Match if query STARTS with one of these
+        # OR contains one early.
+        _SIMPLE_PATTERNS = (
+            "ما هو ", "ما هي ", "ماهو ", "ماهي ",
+            "ما معنى", "ما تعريف", "ما الفرق بين", "الفرق بين",
+            "عرّف ", "عرف ", "عرف لي", "اشرح لي معنى",
+            "وش يعني", "ايش يعني", "يعني ايش",
+            "ما عقوبة", "ما حكم", "ما نص المادة", "نص المادة",
+            "متى يجوز", "متى يُعدّ", "متى يُعد",
+        )
+        # Strong "complex / case-advice" markers — personal situation,
+        # numbered facts, request for procedural steps.
+        _COMPLEX_PATTERNS = (
+            "عندي قضية", "عندي مشكلة", "موكلي", "موكلتي",
+            "ماذا أفعل", "وش اسوي", "ما هي الخطوات",
+            "ما العقوبة المتوقعة", "كيف أرفع", "كيف أطالب",
+            "واعترف", "وعنده سوابق", "و عنده سوابق",
+            "فصلني", "طردني", "سرق من", "احتال علي",
+            "طلبت خلع", "طلبت طلاق", "تزوجت من",
+            "ما حقوقي", "ماحقوقي",
+        )
+        # Personal-detail markers — boost complexity when present.
+        _PERSONAL_DETAILS = (
+            "راتبي", "عمري", "زوجتي", "زوجي", "أطفال",
+            "سنوات خدمة", "اشتغلت", "عملت", "نفذت الحكم",
+            "الف ريال", "ألف ريال",
+        )
+
+        _is_simple  = any(
+            _q_lower.startswith(p) or (" " + p) in _q_lower
+            for p in _SIMPLE_PATTERNS
+        )
+        _is_case    = any(p in _q_lower for p in _COMPLEX_PATTERNS)
+        _has_personal = any(p in _q_lower for p in _PERSONAL_DETAILS)
+
+        if _is_case and not _is_simple:
+            _is_complex = True
+        elif _is_simple and not _is_case:
+            _is_complex = False
+        else:
+            # Fallback: very long queries WITH personal details → complex.
+            # Long-but-conceptual ("ما الفرق بين... في القانون القطري
+            # وما العقوبات...") stays simple.
+            _is_complex = _q_words >= 18 and _has_personal
+
+        log.info(
+            "complexity: %s (words=%d, simple=%s, case=%s, personal=%s) q=%r",
+            "COMPLEX" if _is_complex else "SIMPLE",
+            _q_words, _is_simple, _is_case, _has_personal,
+            (query or "")[:45],
         )
 
         # ── Structured user_msg with cited source blocks ──
@@ -771,7 +972,31 @@ async def handle_general(
             # No RAG context — either follow-up or general concept query.
             # Direct the LLM to use the history AND its general legal
             # knowledge (with conceptual-only framing).
-            if is_short_followup:
+            if _is_followup and _last_assistant:
+                # Smart follow-up: inject the PRIOR ANSWER as the
+                # authoritative context. Do NOT let the LLM treat
+                # "اختصر"/"كم المدد" as a new topic.
+                user_msg = (
+                    "═══ هذا سؤال متابعة — السياق من المحادثة ═══\n\n"
+                    f"**السؤال الأصلي للمستخدم:** {_last_user_q[:500]}\n\n"
+                    f"**إجابتك السابقة (المصدر الموثوق):**\n"
+                    f"{_last_assistant[:1800]}\n\n"
+                    "═══ طلب المستخدم الحالي ═══\n"
+                    f"{query}\n\n"
+                    "═══ تعليمات صارمة ═══\n"
+                    "• المستخدم يطلب تعديلاً على إجابتك السابقة (اختصار / "
+                    "تفصيل / توضيح / كمّل). لا تغيّر الموضوع.\n"
+                    "• إذا طلب «اختصر» أو «بدون تفصيل» أو «بدون فلسفة» — "
+                    "أعد نفس المعلومات القانونية في 2-4 سطور فقط (الأرقام "
+                    "الأساسية + المواد). لا مقدمات.\n"
+                    "• إذا طلب «كمّل» — تابع من حيث توقفت.\n"
+                    "• إذا طلب «وضّح» — وضّح النقطة الغامضة بنفس الموضوع.\n"
+                    "• لا تبحث عن موضوع جديد. لا تطبّق المنهجية الخماسية "
+                    "إلا إذا طُلب صراحةً.\n"
+                    "• المواد القانونية في إجابتك السابقة = المصدر الرسمي. "
+                    "استند إليها لا تتناقض معها.\n"
+                )
+            elif is_short_followup:
                 user_msg = (
                     f"(سؤال متابعة — ارجع لسجل المحادثة أعلاه للسياق)\n\n"
                     f"سؤال المستخدم: {query}\n\n"
@@ -803,7 +1028,10 @@ async def handle_general(
                 "═══\n"
             )
 
-        system = EXPERT_SYSTEM + history_note + (
+        # ═══ Answer Memory — prior facts for self-consistency ═══
+        _prev_facts = _retrieve_answer_facts(sid)
+
+        system = EXPERT_SYSTEM + history_note + _prev_facts + (
             "\n\n═══ وضع المساعد التفاعلي ═══\n"
             "• أجب مباشرة بالتفصيل القانوني ثم اختم بتوصية مراجعة محامٍ.\n"
             "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
@@ -823,12 +1051,14 @@ async def handle_general(
         # M5: dynamic max_tokens — 2200 for complex, 1200 for simple
         _max_tok = 2200 if _is_complex else 1200
 
-        # ── Stream ──
+        # ── Stream + capture full answer for Answer Memory ──
+        _answer_parts: list[str] = []
         try:
             async for piece in _llm.stream_openai(
                 system, messages, max_tokens=_max_tok,
             ):
                 if piece:
+                    _answer_parts.append(piece)
                     yield _sse({
                         "type": "chunk", "content": piece, "text": piece,
                         "authoritative_path": "runtime_v2",
@@ -838,6 +1068,14 @@ async def handle_general(
             log.exception("general stream failed")
             err = f"تعذّر معالجة السؤال عبر النموذج ({type(e).__name__})."
             yield _sse({"type": "chunk", "content": err, "text": err})
+
+        # ── Persist facts from this answer for future self-consistency ──
+        try:
+            _full = "".join(_answer_parts)
+            if _full:
+                _store_answer_facts(sid, _full, query)
+        except Exception as _mem_err:
+            log.debug("answer_memory store wrap: %s", _mem_err)
 
         conf = 82 if sources else 55
         yield _sse(_stamp_authority({
