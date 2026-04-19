@@ -55,6 +55,28 @@ from core.phase0_router import route_query
 from core.nlp_utils import get_history, add_to_history
 from core import cancellation as _cancel
 
+# ── Legal Concept DB + Hallucination Guard (Part 2) ──
+try:
+    from core.legal_concepts import (
+        find_concepts_in_query as _lc_find,
+        build_concept_context as _lc_build_ctx,
+        verify_concepts_in_answer as _lc_verify_concepts,
+        verify_articles_in_context as _lc_verify_articles,
+        extract_article_numbers as _lc_extract_arts,
+    )
+    _CONCEPTS_AVAILABLE = True
+except Exception as _lc_err:  # pragma: no cover — degrade open
+    _CONCEPTS_AVAILABLE = False
+    _lc_find = lambda *_a, **_k: []  # type: ignore
+    _lc_build_ctx = lambda *_a, **_k: ""  # type: ignore
+    _lc_verify_concepts = lambda *_a, **_k: []  # type: ignore
+    _lc_verify_articles = lambda *_a, **_k: []  # type: ignore
+    _lc_extract_arts = lambda *_a, **_k: []  # type: ignore
+    logging.getLogger(__name__).warning(
+        "legal_concepts unavailable (%s) — concept guard disabled",
+        type(_lc_err).__name__,
+    )
+
 # ── Optional imports for Phase 2/3 handlers (lazy — degrade on miss) ──
 import asyncio
 import asyncpg  # noqa: F401 — used inside handlers via connection
@@ -1031,7 +1053,30 @@ async def handle_general(
         # ═══ Answer Memory — prior facts for self-consistency ═══
         _prev_facts = _retrieve_answer_facts(sid)
 
-        system = EXPERT_SYSTEM + history_note + _prev_facts + (
+        # ═══ Legal Concept Injection (Part 2 — Axis A) ═══
+        # Detect Qatari legal terms in the query and inject their exact
+        # definitions into the system prompt. Prevents GPT from inventing
+        # wrong definitions from Egyptian/Saudi law memory.
+        _found_concepts: list[dict] = []
+        _concept_context = ""
+        _concept_terms: list[str] = []
+        if _CONCEPTS_AVAILABLE:
+            try:
+                _found_concepts = _lc_find(query)
+                if _found_concepts:
+                    _concept_context = "\n\n" + _lc_build_ctx(_found_concepts)
+                    _concept_terms = [
+                        str(c.get("term", "")) for c in _found_concepts
+                        if c.get("term")
+                    ]
+                    log.info(
+                        "concept_injection: detected %d concept(s) — %s",
+                        len(_concept_terms), _concept_terms,
+                    )
+            except Exception as _ci_err:
+                log.debug("concept_injection miss: %s", _ci_err)
+
+        system = EXPERT_SYSTEM + history_note + _prev_facts + _concept_context + (
             "\n\n═══ وضع المساعد التفاعلي ═══\n"
             "• أجب مباشرة بالتفصيل القانوني ثم اختم بتوصية مراجعة محامٍ.\n"
             "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
@@ -1070,18 +1115,90 @@ async def handle_general(
             yield _sse({"type": "chunk", "content": err, "text": err})
 
         # ── Persist facts from this answer for future self-consistency ──
+        _full = "".join(_answer_parts)
         try:
-            _full = "".join(_answer_parts)
             if _full:
                 _store_answer_facts(sid, _full, query)
         except Exception as _mem_err:
             log.debug("answer_memory store wrap: %s", _mem_err)
 
+        # ═══ Hallucination Guard (Part 2 — Axis B) ═══
+        # Fires AFTER the stream completes. Never blocks the answer — only
+        # appends a correction block if we detect a known hallucination
+        # pattern or an article number that was not in the provided context.
+        _guard_warnings: list[str] = []
+        if _CONCEPTS_AVAILABLE and _full:
+            # 1) Concept verification — does the answer contradict the
+            #    injected definitions or trigger a known hallucination?
+            try:
+                _guard_warnings.extend(
+                    _lc_verify_concepts(_full, _concept_terms) or []
+                )
+            except Exception as _gc_err:
+                log.debug("concept verify miss: %s", _gc_err)
+
+            # 2) Article verification — does the answer cite an article
+            #    number that never appeared in retrieved chunks AND was
+            #    never mentioned in answer memory?
+            try:
+                # Build the pool of "trusted" articles:
+                # chunks + previous session facts
+                _ctx_text_parts: list[str] = []
+                for _ch in (sources or []):
+                    _c = _ch.get("content") or ""
+                    if _c:
+                        _ctx_text_parts.append(_c)
+                # pull previous facts from Redis
+                _prev_block = _prev_facts or ""
+                if _prev_block:
+                    _ctx_text_parts.append(_prev_block)
+                # also trust whatever the concept-context mentions
+                if _concept_context:
+                    _ctx_text_parts.append(_concept_context)
+                _ctx_text = "\n".join(_ctx_text_parts)
+
+                _suspicious = _lc_verify_articles(_full, _ctx_text, tolerance=0)
+                if _suspicious:
+                    # Only warn if there are MORE THAN 1 suspicious numbers
+                    # and they are not common ubiquitous refs.
+                    # Exclude trivial numbers like "1", "2" that are false-positives.
+                    _filt = [a for a in _suspicious if a.isdigit() and int(a) > 3]
+                    if _filt:
+                        _guard_warnings.append(
+                            "تنبيه: المواد التالية ذُكرت في الإجابة ولم تظهر في "
+                            "النصوص المسترجعة — يُستحسن التحقق منها من المصدر الرسمي: "
+                            + "، ".join(f"م{a}" for a in _filt[:6])
+                        )
+            except Exception as _ga_err:
+                log.debug("article verify miss: %s", _ga_err)
+
+        if _guard_warnings:
+            correction = (
+                "\n\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🛡️ **تنبيه الحارس القانوني:**\n"
+                + "\n".join(f"• {w}" for w in _guard_warnings[:4])
+                + "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            yield _sse({
+                "type": "chunk", "content": correction, "text": correction,
+                "source": "hallucination_guard",
+                "authoritative_path": "runtime_v2",
+                "runtime_authority": "runtime_v2",
+            })
+            log.info(
+                "hallucination_guard: emitted %d warning(s)",
+                len(_guard_warnings),
+            )
+
         conf = 82 if sources else 55
+        if _guard_warnings:
+            conf = max(40, conf - 20)  # lower confidence when guard fires
         yield _sse(_stamp_authority({
             "type": "done", "runtime": "phase0_general",
             "route": "general", "confidence": conf,
             "sources_count": len(sources),
+            "concepts_injected": _concept_terms,
+            "guard_warnings": len(_guard_warnings),
         }))
 
     return StreamingResponse(gen(), media_type="text/event-stream")
