@@ -52,7 +52,7 @@ async def security_middleware(request: Request, call_next):
         referer = request.headers.get("referer", "")
         origin = request.headers.get("origin", "")
         is_same_origin = any(
-            ref.startswith(o) for o in ("http://localhost:", "http://127.0.0.1:", "https://")
+            ref.startswith(o) for o in ("http://localhost", "http://127.0.0.1", "https://")
             for ref in (referer, origin) if ref
         )
         if not is_same_origin:

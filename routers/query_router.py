@@ -429,7 +429,83 @@ async def handle_calculator(payload: dict) -> StreamingResponse:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Handler: general — LLM + RAG
+# Domain filter — prevent cross-law contamination in RAG results
+# ──────────────────────────────────────────────────────────────────
+
+_CRIMINAL_SIGNALS = (
+    "عقوبة", "عقوبات", "جناية", "جنحة", "سوابق", "رد الاعتبار",
+    "رد اعتبار", "اعتبار قضائي", "صحيفة جنائية", "محكوم عليه",
+    "تنفيذ العقوبة", "حبس", "سجن", "إجراءات جنائية",
+    "الإجراءات الجنائية", "نيابة", "جريمة", "متهم", "إدانة",
+    "براءة", "تحقيق", "مخدرات", "سرقة", "قتل", "ضرب",
+    "تزوير", "رشوة", "نصب", "احتيال", "قذف", "سب",
+    "تهديد", "ابتزاز", "اعتداء",
+)
+_LABOR_SIGNALS = (
+    "عمل", "عامل", "راتب", "أجر", "مكافأة نهاية", "فصل تعسفي",
+    "إجازة", "عقد عمل", "صاحب العمل", "استقالة", "خدمة",
+    "بدل إنذار", "انهاء الخدمة",
+)
+_FAMILY_SIGNALS = (
+    "حضانة", "طلاق", "نفقة", "زواج", "أسرة", "مهر", "عدة",
+    "ولاية", "محضون", "طليقتي", "مطلقتي",
+)
+_COMMERCIAL_SIGNALS = (
+    "شركة", "شركات", "إفلاس", "مفلس", "تجارة", "تاجر",
+    "وكيل تجاري", "علامة تجارية", "سجل تجاري",
+)
+
+
+def _filter_chunks_by_domain(
+    chunks: list[dict], query: str,
+) -> list[dict]:
+    """Drop chunks that belong to a legal domain that is clearly
+    unrelated to the user's query. Prevents the "labor article
+    returned for a criminal question" class of bug.
+    """
+    if not chunks or len(chunks) <= 2 or not query:
+        return chunks
+
+    q = query.lower()
+    is_criminal   = any(s in q for s in _CRIMINAL_SIGNALS)
+    is_labor      = any(s in q for s in _LABOR_SIGNALS)
+    is_family     = any(s in q for s in _FAMILY_SIGNALS)
+    is_commercial = any(s in q for s in _COMMERCIAL_SIGNALS)
+
+    if not (is_criminal or is_labor or is_family or is_commercial):
+        return chunks
+
+    if is_criminal and not is_commercial:
+        # "رد الاعتبار" (criminal) vs "رد اعتبار المفلس" (commercial): if
+        # the user didn't mention إفلاس/شركة/تجارة, drop commercial chunks.
+        reject = _LABOR_SIGNALS + _FAMILY_SIGNALS + _COMMERCIAL_SIGNALS
+        accept = _CRIMINAL_SIGNALS
+    elif is_labor:
+        reject = _CRIMINAL_SIGNALS + _FAMILY_SIGNALS + _COMMERCIAL_SIGNALS
+        accept = _LABOR_SIGNALS
+    elif is_family:
+        reject = _CRIMINAL_SIGNALS + _LABOR_SIGNALS + _COMMERCIAL_SIGNALS
+        accept = _FAMILY_SIGNALS
+    else:  # is_commercial
+        reject = _CRIMINAL_SIGNALS + _LABOR_SIGNALS + _FAMILY_SIGNALS
+        accept = _COMMERCIAL_SIGNALS
+
+    filtered: list[dict] = []
+    for ch in chunks:
+        text = ((ch.get("content", "") or "") + " " +
+                 (ch.get("law_name", "") or "")).lower()
+        has_accept = any(s in text for s in accept)
+        has_only_reject = (
+            any(s in text for s in reject) and not has_accept
+        )
+        if not has_only_reject:
+            filtered.append(ch)
+    # Fallback — never return empty
+    return filtered if len(filtered) >= 2 else chunks
+
+
+# ──────────────────────────────────────────────────────────────────
+# Handler: general — LLM + RAG (history-aware, source-cited)
 # ──────────────────────────────────────────────────────────────────
 
 async def handle_general(
@@ -443,43 +519,129 @@ async def handle_general(
             "type": "start", "runtime": "phase0_general",
             "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
         })
-        # Retrieval — llm_service.search uses app_state.pool
-        sources = []
+
+        # ── Detect the legal domain of the query (for RAG boosting) ──
+        query_domain: str | None = None
         try:
-            sources = await _llm.search(
-                queries=[query], key_terms=[query], top_k=5,
-            )
+            from core.nlp_utils import detect_legal_domain, extract_kw
+            _kws = extract_kw(query)
+            query_domain = detect_legal_domain(_kws)
         except Exception as e:
-            log.debug("general search miss: %s", e)
-            sources = []
-        context = ""
-        if sources:
-            parts = ["**المصادر:**\n"]
-            for i, r in enumerate(sources[:5], 1):
-                lname = r.get("law_name", "مصدر")
-                c = (r.get("content") or "")[:450]
-                parts.append(f"[{i}] {lname}:\n{c}\n")
-            context = "\n".join(parts)
-        # System prompt tuned for interactive mode
-        system = EXPERT_SYSTEM + (
-            "\n\n═══ وضع المساعد التفاعلي ═══\n"
-            "• للأسئلة المعرفية: اشرح بوضوح في فقرة أو فقرتين — "
-            "  لا تستخدم هيكل 'تكييف/سند/تحليل'.\n"
-            "• للاستشارات: اسأل عن التفاصيل الناقصة ثم وجّه.\n"
-            "• استعمل المصادر المُرفقة فقط — لا تخترع أرقام مواد.\n"
-            "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
+            log.debug("domain detect miss: %s", e)
+
+        # ── Retrieval + domain filter ──
+        # Skip RAG for SHORT follow-up queries when history exists —
+        # the answer is already in the conversation, not in the DB.
+        is_short_followup = (
+            bool(history) and
+            len((query or "").split()) <= 6
         )
-        user_msg = (context + "\n\nالسؤال: " + query) if context else query
+        sources = []
+        if not is_short_followup:
+            try:
+                sources = await _llm.search(
+                    queries=[query], key_terms=[query], top_k=10,
+                    domain=query_domain,
+                )
+            except Exception as e:
+                log.debug("general search miss: %s", e)
+                sources = []
+            if sources:
+                try:
+                    sources = _filter_chunks_by_domain(sources, query)
+                except Exception as e:
+                    log.debug("domain filter miss: %s", e)
+
+        # ── Structured user_msg with cited source blocks ──
+        if sources:
+            context_parts: list[str] = []
+            for i, ch in enumerate(sources[:8], 1):
+                law   = ch.get("law_name", "") or ""
+                art   = ch.get("article_number", "") or ""
+                lnum  = ch.get("law_number", "") or ""
+                lyear = ch.get("law_year", "")   or ""
+                cont  = (ch.get("content", "") or "")[:600]
+
+                header = f"[مصدر {i}]"
+                if law:
+                    header += f" القانون: {law}"
+                if lnum:
+                    header += f" رقم ({lnum})"
+                if lyear:
+                    header += f" لسنة {lyear}"
+                if art:
+                    header += f" — المادة ({art})"
+                context_parts.append(f"{header}\n{cont}")
+
+            rag_context = "\n---\n".join(context_parts)
+            user_msg = (
+                "═══ النصوص القانونية المسترجعة من قاعدة البيانات ═══\n\n"
+                + rag_context
+                + "\n\n═══ تعليمات ═══\n"
+                + "• ابنِ إجابتك من النصوص أعلاه — حتى لو لم تكن إجابة مباشرة حرفية.\n"
+                + "• ابحث في النصوص عن: أرقام مواد، مدد، شروط، عقوبات، تعاريف.\n"
+                + "• اقتبس النصوص ذات الصلة مع ذكر القانون ورقم المادة.\n"
+                + "• إذا وجدت معلومة جزئية — استعملها وأشر إلى مصدرها.\n"
+                + "• لا تقل 'لم أجد' إلا إذا كانت النصوص أعلاه بلا صلة تامة بالموضوع.\n"
+                + "• إذا كان السياق يشمل قوانين مختلفة، اختر الأنسب للسؤال وتجاهل البقية.\n\n"
+                + f"═══ سؤال المستخدم ═══\n{query}"
+            )
+        else:
+            # No RAG context — either follow-up or general concept query.
+            # Direct the LLM to use the history AND its general legal
+            # knowledge (with conceptual-only framing).
+            if is_short_followup:
+                user_msg = (
+                    f"(سؤال متابعة — ارجع لسجل المحادثة أعلاه للسياق)\n\n"
+                    f"سؤال المستخدم: {query}\n\n"
+                    f"أجب استناداً إلى آخر رد أرسلته في المحادثة. "
+                    f"لا تقل 'لم أجد' أو 'لا أستطيع الرجوع'."
+                )
+            else:
+                user_msg = (
+                    f"سؤال المستخدم: {query}\n\n"
+                    f"لم تُسترجع نصوص قانونية محددة من قاعدة البيانات لهذا السؤال.\n"
+                    f"أجب شرحاً مفاهيمياً إن كان السؤال يتعلق بتعريف أو "
+                    f"فرق بين مفهومين أو مبدأ عام. "
+                    f"إن كان السؤال يطلب رقماً محدداً، قل إنك لم تجد الرقم ووجّه للمصدر الرسمي."
+                )
+
+        # ── History-aware system prompt ──
+        history_note = ""
+        if history and len(history) > 0:
+            history_note = (
+                "\n\n═══ سجل المحادثة مرفق في messages أعلاه ═══\n"
+                "• ارجع لآخر رد أرسلته وتابع منه في نفس الموضوع.\n"
+                "• لا تقل أبداً 'لا أستطيع الرجوع إلى الرسائل السابقة'.\n"
+                "• للمتابعات القصيرة (كمّل / هل أنت متأكد / وضّح / أقصد "
+                "رسالتك السابقة):\n"
+                "  — استعمل المعلومات المذكورة في آخر رد لك كمصدر موثوق.\n"
+                "  — لا تطبّق قاعدة 'لم أجد الرقم' إذا كانت المعلومة في "
+                "سجل المحادثة.\n"
+                "  — أكّد أو صحّح ما ذكرته سابقاً بناءً على معرفتك.\n"
+                "═══\n"
+            )
+
+        system = EXPERT_SYSTEM + history_note + (
+            "\n\n═══ وضع المساعد التفاعلي ═══\n"
+            "• أجب مباشرة بالتفصيل القانوني ثم اختم بتوصية مراجعة محامٍ.\n"
+            "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
+            "• لا تهرّب بـ 'أحتاج توضيح أكثر' إذا كان السؤال واضحاً.\n"
+        )
+
+        # ── Build messages with last 8 turns ──
         messages: list[dict] = []
         if history:
-            for m in history[-4:]:
-                r = m.get("role"); c = m.get("content")
-                if r in ("user", "assistant") and c:
+            for m in history[-8:]:
+                r = m.get("role")
+                c = m.get("content")
+                if r in ("user", "assistant") and c and c.strip():
                     messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_msg})
 
+        # ── Stream ──
         try:
-            async for piece in _llm.stream_openai(system, messages, max_tokens=1200):
+            async for piece in _llm.stream_openai(system, messages, max_tokens=1400):
                 if piece:
                     yield _sse({
                         "type": "chunk", "content": piece, "text": piece,
@@ -491,7 +653,7 @@ async def handle_general(
             err = f"تعذّر معالجة السؤال عبر النموذج ({type(e).__name__})."
             yield _sse({"type": "chunk", "content": err, "text": err})
 
-        conf = 78 if sources else 55
+        conf = 82 if sources else 55
         yield _sse(_stamp_authority({
             "type": "done", "runtime": "phase0_general",
             "route": "general", "confidence": conf,
@@ -543,15 +705,26 @@ async def handle_continuation(
             "authoritative_path": "runtime_v2", "runtime_authority": "runtime_v2",
         })
         system = (
-            "أنت ميزان — مساعد قانوني قطري. " + instr
-            + "\nلا تقل 'كما ذكرت سابقاً' ولا تكرر. "
-            + "حافظ على السياق القانوني وأسلوب الرد السابق."
+            "أنت ميزان — مستشار قانوني قطري. " + instr
+            + "\n\n═══ قواعد صارمة ═══\n"
+            + "• لديك سجل المحادثة السابقة أعلاه.\n"
+            + "• لا تقل أبداً 'لا أستطيع الرجوع إلى الرسائل السابقة' — ارجع لها.\n"
+            + "• إذا قال 'أقصد رسالتك السابقة' أو 'هل أنت متأكد' أو 'كمّل' — "
+            "ارجع لآخر رد لك وأجب عن نفس الموضوع.\n"
+            + "• لا تعيد تعريف مصطلحات سبق شرحها.\n"
+            + "• كل حكم قانوني تذكره يجب أن يتضمن: اسم القانون + رقمه + سنته "
+            "+ رقم المادة.\n"
+            + "• إذا لم يوجد مصدر لرقم معين — لا تذكره.\n"
         )
-        messages = [
-            {"role": "user",      "content": f"السؤال الأصلي: {last_user}"},
-            {"role": "assistant", "content": last_asst[:3000]},
-            {"role": "user",      "content": query},
-        ]
+        # Pass the last 8 turns of real history (not just synthetic single pair)
+        messages: list[dict] = []
+        if history:
+            for m in history[-8:]:
+                r = m.get("role")
+                c = m.get("content")
+                if r in ("user", "assistant") and c and c.strip():
+                    messages.append({"role": r, "content": c})
+        messages.append({"role": "user", "content": query})
         try:
             async for piece in _llm.stream_openai(system, messages, max_tokens=1000):
                 if piece:

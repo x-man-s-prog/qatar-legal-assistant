@@ -245,9 +245,18 @@ def detect_table(query: str) -> Optional[str]:
 def detect_calculator(query: str) -> Optional[Dict[str, Any]]:
     q = (query or "").strip().lower()
     calc_type: Optional[str] = None
-    if re.search(r"(?:احسب|كم|حساب)\s+(?:لي\s+)?(?:كم\s+)?(?:ال)?(?:مكافأة|مكافاه)", q):
+    # End-of-service: catch "احسب / كيف تحسب / كيف أحسب / حساب" + مكافأة
+    if re.search(
+        r"(?:احسب|حساب|كيف\s+(?:ا|ت|ن)?حسب|كم)\s+(?:لي\s+)?(?:كم\s+)?(?:ال)?(?:مكافأة|مكافاه)",
+        q,
+    ) or re.search(
+        r"(?:مكافأة|مكافاه)\s+نهاي[ةه]\s+(?:ال)?خدم[ةه]", q,
+    ) and re.search(r"\d", q):
         calc_type = "end_of_service"
-    elif re.search(r"(?:احسب|كم)\s+(?:لي\s+)?تعويض", q):
+    # Unfair-dismissal compensation
+    elif re.search(
+        r"(?:احسب|حساب|كيف\s+(?:ا|ت|ن)?حسب|كم)\s+(?:لي\s+)?تعويض", q,
+    ):
         calc_type = "unfair_dismissal"
     if not calc_type:
         return None
