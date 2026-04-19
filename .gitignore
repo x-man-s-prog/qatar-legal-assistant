@@ -62,3 +62,31 @@ _backup_*/
 middleware_fetched.py
 nlp_utils_current.py
 llm_service_current.py
+
+# User data / PII
+user_memories/
+user_data/
+*.user_data.json
+
+# Stray / generated outputs
+null
+server_*.txt
+server_*.log
+quality_check.txt
+reindex_out.txt
+test_results.json
+*_progress.json
+*_report.json
+phase*_results.json
+deep_verify_report.json
+fix_report.json
+full_reindex_progress.json
+attachments_progress.json
+verify_progress.json
+
+# One-off scripts (not part of core app)
+almeezan_downloader*.py
+epstein_ds1_12_FINAL.py
+index_almeezan_v3.py
+index_txt_v3.py
+laws_downloader.py
