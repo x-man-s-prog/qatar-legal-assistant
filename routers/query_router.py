@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -96,6 +97,33 @@ except Exception as _pl_err:  # pragma: no cover — degrade open
         type(_pl_err).__name__,
     )
 
+# ── Case Memory (Phase 2 · Layer 3) — session-scoped case graph ──
+try:
+    from core.case_memory import (
+        CaseMemoryStore,
+        build_case_memory_block,
+        build_case_signature,
+        generate_case_summary_once,
+        should_skip_case_memory,
+    )
+    _CASE_MEMORY_AVAILABLE = True
+    _case_memory_store = CaseMemoryStore()
+except Exception as _cm_err:  # pragma: no cover — degrade open
+    _CASE_MEMORY_AVAILABLE = False
+    _case_memory_store = None
+    def build_case_signature(*_a, **_k): return None  # type: ignore
+    def build_case_memory_block(*_a, **_k): return ""  # type: ignore
+    def should_skip_case_memory(*_a, **_k):  # type: ignore
+        return (True, "module_unavailable")
+    async def generate_case_summary_once(*_a, **_k): return None  # type: ignore
+    logging.getLogger(__name__).warning(
+        "case_memory unavailable (%s) — session case graph disabled",
+        type(_cm_err).__name__,
+    )
+
+# Env-based runtime toggle (independent of availability). Default true.
+_CASE_MEMORY_ENABLED = os.getenv("CASE_MEMORY_ENABLED", "true").lower() == "true"
+
 # ── Optional imports for Phase 2/3 handlers (lazy — degrade on miss) ──
 import asyncio
 from core import app_state as _app_state
@@ -104,6 +132,93 @@ from core import app_state as _app_state
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ═════════════════════════════════════════════════════════════════
+# Case Memory background task (Phase 2 · Layer 3)
+# ═════════════════════════════════════════════════════════════════
+
+async def _store_case_memory_bg(
+    session_id: str,
+    signature,
+    query: str,
+    answer: str,
+    provided_precedents: list,
+) -> None:
+    """Background task: store or touch a case in Redis after response completes.
+
+    NEVER blocks the response stream — fired via ``asyncio.create_task``
+    from ``handle_general``. All exceptions are caught and logged; a
+    failure here must not destabilise any user-visible path.
+
+    Upsert semantics:
+      • Existing signature → ``touch`` (``turn_count += 1`` + TTL refresh).
+      • New signature     → attempt GPT summary (best effort, falls back
+        to query prefix) + full ``store``.
+
+    Extract articles from ``answer`` via ``_lc_extract_arts``, and derive
+    precedent refs from ``provided_precedents`` (``case_number`` when
+    present — the ~46 % with extractable numbers — else ``internal_ref``
+    so the ~54 % case-less rulings are still linked back).
+    """
+    if not _CASE_MEMORY_AVAILABLE or _case_memory_store is None:
+        return
+    try:
+        existing = await _case_memory_store.get_by_signature(
+            session_id=session_id,
+            signature=signature,
+        )
+        if existing is not None:
+            await _case_memory_store.touch(
+                session_id=session_id,
+                case_hash=signature.hash,
+            )
+            log.info(
+                "case_memory: touched existing case %s (turn_count += 1)",
+                signature.hash[:8],
+            )
+            return
+
+        # New case — derive articles + precedents, attempt summary.
+        articles_cited: list[str] = []
+        try:
+            articles_cited = _lc_extract_arts(answer) or []
+        except Exception:
+            articles_cited = []
+
+        precedents_cited: list[str] = [
+            p.case_number or p.internal_ref
+            for p in (provided_precedents or [])
+            if (getattr(p, "case_number", None) or getattr(p, "internal_ref", None))
+        ]
+
+        summary = None
+        try:
+            summary = await generate_case_summary_once(query=query, answer=answer)
+        except Exception as _sum_err:
+            log.warning("case_memory: summary generation exception: %s", _sum_err)
+
+        if not summary:
+            summary = (query[:120] + "...") if len(query) > 120 else query
+
+        await _case_memory_store.store(
+            session_id=session_id,
+            signature=signature,
+            summary=summary,
+            legal_frame={
+                "articles": articles_cited,
+                "precedents": precedents_cited,
+            },
+        )
+        log.info(
+            "case_memory: stored new case %s (session=%s, articles=%d, precedents=%d)",
+            signature.hash[:8],
+            session_id[:16],
+            len(articles_cited),
+            len(precedents_cited),
+        )
+    except Exception as _bg_err:
+        log.warning("case_memory background storage failed: %s", _bg_err)
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -1135,7 +1250,83 @@ async def handle_general(
                 _precedent_block = ""
                 _provided_precedents = []
 
-        system = EXPERT_SYSTEM + history_note + _prev_facts + _concept_context + _precedent_block + (
+        # ═══ Case Memory Block (Phase 2 · Layer 3) ═══
+        # Session-scoped case graph. Jaccard over deterministic signatures —
+        # no embeddings, no GPT in the hot path. Injected BEFORE the
+        # precedent_block so that prior-case context shapes how the model
+        # interprets retrieved rulings (not the other way round).
+        #
+        # TWO DECOUPLED GATES:
+        #   • Storage eligibility — "is this query case-worthy?"
+        #     (not definitional, has concepts, not greeting/meta/…).
+        #     First turn IS eligible for storage; it must be, or turn-2
+        #     has nothing to match against.
+        #   • Block injection — "are there prior cases to show?"
+        #     Requires history_length > 0 in addition to eligibility.
+        #
+        # We reuse ``should_skip_case_memory`` for the eligibility check
+        # but pass ``history_length=1`` to mask its ``first_turn`` rule,
+        # which speaks to block injection, not storage. The injection
+        # decision is then gated separately on the REAL history length.
+        #
+        # Degrades open: any failure → empty block → no effect on answer.
+        _case_memory_block = ""
+        _case_memory_current_sig = None
+        _case_memory_should_store = False
+        if (
+            _CASE_MEMORY_AVAILABLE
+            and _CASE_MEMORY_ENABLED
+            and not is_short_followup
+        ):
+            try:
+                # Eligibility: definitional / no_concepts / always-skip classes.
+                # history_length=1 is intentional — see docstring above.
+                _cm_eligible_skip, _cm_reason = should_skip_case_memory(
+                    query=query,
+                    phase0_class=None,
+                    concepts=_concept_terms,
+                    history_length=1,
+                )
+                if not _cm_eligible_skip:
+                    _case_memory_current_sig = build_case_signature(
+                        query=query,
+                        concepts=_concept_terms,
+                        domain=query_domain,
+                    )
+                    _case_memory_should_store = True
+
+                    # Block injection requires actual prior turns in this session.
+                    _cm_history_len = len(history) if history else 0
+                    if _cm_history_len > 0:
+                        _cm_matches = await _case_memory_store.find_similar(
+                            session_id=sid,
+                            current_sig=_case_memory_current_sig,
+                            threshold=0.60,
+                            max_results=3,
+                        )
+                        if _cm_matches:
+                            _case_memory_block = build_case_memory_block(
+                                matches=_cm_matches,
+                                current_query=query,
+                            )
+                            log.info(
+                                "case_memory: matched %d prior case(s), "
+                                "top_hash=%s, top_sim=%.2f",
+                                len(_cm_matches),
+                                _cm_matches[0][0].case_hash[:8],
+                                _cm_matches[0][1],
+                            )
+                else:
+                    log.debug(
+                        "case_memory eligibility skip: %s", _cm_reason
+                    )
+            except Exception as _cm_err_rt:
+                log.warning("case_memory pre-stream failed: %s", _cm_err_rt)
+                _case_memory_block = ""
+                _case_memory_current_sig = None
+                _case_memory_should_store = False
+
+        system = EXPERT_SYSTEM + history_note + _prev_facts + _concept_context + _case_memory_block + _precedent_block + (
             "\n\n═══ وضع المساعد التفاعلي ═══\n"
             "• أجب مباشرة بالتفصيل القانوني ثم اختم بتوصية مراجعة محامٍ.\n"
             "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
@@ -1202,6 +1393,33 @@ async def handle_general(
                 _store_answer_facts(sid, _full_for_memory, query)
         except Exception as _mem_err:
             log.debug("answer_memory store wrap: %s", _mem_err)
+
+        # ═══ Case Memory background storage (Phase 2 · Layer 3) ═══
+        # NEVER blocks the response stream — ``asyncio.create_task`` fires
+        # and returns immediately. Summary generation + Redis write happen
+        # out-of-band. Gate: must have (a) module available, (b) env flag
+        # on, (c) skip-gate cleared, (d) signature built, (e) non-empty
+        # answer. Storage path handles upsert (touch vs store) internally.
+        if (
+            _CASE_MEMORY_AVAILABLE
+            and _CASE_MEMORY_ENABLED
+            and _case_memory_should_store
+            and _case_memory_current_sig is not None
+            and _full
+        ):
+            try:
+                asyncio.create_task(_store_case_memory_bg(
+                    session_id=sid,
+                    signature=_case_memory_current_sig,
+                    query=query,
+                    answer=_full_for_memory or _full,
+                    provided_precedents=_provided_precedents,
+                ))
+            except Exception as _cm_task_err:
+                log.warning(
+                    "case_memory: failed to schedule bg task: %s",
+                    _cm_task_err,
+                )
 
         # ═══ Hallucination Guard (Part 2 — Axis B) ═══
         # Fires AFTER the stream completes. Never blocks the answer — only
