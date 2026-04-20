@@ -1,0 +1,76 @@
+{
+  "description": "Phase 2 · Layer 2 cost-measurement sample — 10 queries, 4 مدني + 4 جنائي + 2 عام (5 simple + 5 complex). Reproducible: keep ordering stable so future re-measures hit the same embedding cache.",
+  "threshold_at_build": 0.72,
+  "queries": [
+    {
+      "id": "q1",
+      "kind": "simple",
+      "expected_tamyeez_domain": "جنائي",
+      "query": "ما هو التقادم الجنائي في القانون القطري",
+      "notes": "single-concept definition; canonical legal term"
+    },
+    {
+      "id": "q2",
+      "kind": "simple",
+      "expected_tamyeez_domain": "جنائي",
+      "query": "ما عقوبة السرقة في قانون العقوبات القطري",
+      "notes": "single-article question"
+    },
+    {
+      "id": "q3",
+      "kind": "simple",
+      "expected_tamyeez_domain": "جنائي",
+      "query": "ما هي قرينة البراءة",
+      "notes": "constitutional criminal concept"
+    },
+    {
+      "id": "q4",
+      "kind": "simple",
+      "expected_tamyeez_domain": "مدني",
+      "query": "ما هي حجية الأمر المقضي",
+      "notes": "civil-procedure concept"
+    },
+    {
+      "id": "q5",
+      "kind": "simple",
+      "expected_tamyeez_domain": "مدني",
+      "query": "ما هو الفصل التعسفي في قانون العمل القطري",
+      "notes": "labor → civil in Tamyeez taxonomy"
+    },
+    {
+      "id": "q6",
+      "kind": "complex",
+      "expected_tamyeez_domain": "جنائي",
+      "query": "عندي موظف سرق من الشركة 50 ألف واعترف وعنده سوابق ما العقوبة المتوقعة وهل يحق لي التعويض المدني",
+      "notes": "multi-element scenario + analytical question"
+    },
+    {
+      "id": "q7",
+      "kind": "complex",
+      "expected_tamyeez_domain": "مدني",
+      "query": "اكتب لي مذكرة نفقة زوجية وأطفال لموكلتي المطلقة لها 3 أطفال 5 و 8 و 12 سنة طليقها موظف حكومي راتبه 25000 ريال وامتنع عن الإنفاق منذ 6 أشهر",
+      "notes": "drafting request — exercises compose_memo path"
+    },
+    {
+      "id": "q8",
+      "kind": "complex",
+      "expected_tamyeez_domain": "مدني",
+      "query": "فسخ عقد الإيجار للإخلال بأداء الأجرة ورفع دعوى إخلاء بعد تأخر السداد لستة أشهر وما هي الإجراءات المقررة",
+      "notes": "civil scenario + procedural follow-up"
+    },
+    {
+      "id": "q9",
+      "kind": "complex",
+      "expected_tamyeez_domain": "عام",
+      "query": "ما حقوق الإنسان المكفولة في الدستور القطري وما هي ضمانات المحاكمة العادلة المعتبرة دستورياً",
+      "notes": "constitutional / administrative — general bucket"
+    },
+    {
+      "id": "q10",
+      "kind": "complex",
+      "expected_tamyeez_domain": "عام",
+      "query": "ما إجراءات التظلم من قرار إداري صادر من جهة حكومية وما المواعيد المقررة للطعن وأثر فوات الميعاد",
+      "notes": "administrative procedure — general bucket"
+    }
+  ]
+}

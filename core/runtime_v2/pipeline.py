@@ -71,6 +71,45 @@ _DRAFT_TRIGGERS = (
 )
 
 
+# ═════════════════════════════════════════════════════════════════════
+# CP3 — DomainKey → Tamyeez bucket (for Precedent Linker)
+# ─────────────────────────────────────────────────────────────────────
+# Maps our 19 runtime_v2 domain keys to one of {مدني, جنائي, عام}.
+# Used ONLY by compose_memo to tell the Precedent Linker which bucket
+# to filter on. No behavior change for non-drafting paths.
+# ═════════════════════════════════════════════════════════════════════
+
+_DOMAINKEY_TAMYEEZ = {
+    # Civil / commercial / labor / family → مدني (Tamyeez classification)
+    DomainKey.EMPLOYMENT_VS_PARTNERSHIP:  "مدني",
+    DomainKey.GUARANTEE_CHEQUE:           "مدني",
+    DomainKey.DEATH_ILLNESS_VS_DEBT:      "مدني",
+    DomainKey.CODE_OWNERSHIP_PRIOR_LIBS:  "مدني",
+    DomainKey.FAMILY_CUSTODY:             "مدني",
+    DomainKey.UNLAWFUL_TERMINATION:       "مدني",
+    DomainKey.RENTAL:                     "مدني",
+    DomainKey.DIVORCE_FOR_HARM:           "مدني",
+    DomainKey.FAMILY_NAFAQA:              "مدني",
+    # Criminal → جنائي
+    DomainKey.CRIMINAL_DRUG_DEFENSE:      "جنائي",
+    DomainKey.DEFAMATION:                 "جنائي",
+    DomainKey.ASSAULT:                    "جنائي",
+    DomainKey.BLACKMAIL_THREAT:           "جنائي",
+    DomainKey.THEFT:                      "جنائي",
+    DomainKey.FRAUD:                      "جنائي",
+    DomainKey.CYBER_CRIME:                "جنائي",
+    DomainKey.FRAUD_EMBEZZLEMENT:         "جنائي",
+    DomainKey.FORGERY:                    "جنائي",
+    DomainKey.BAD_CHECK:                  "جنائي",
+    # UNKNOWN handled upstream in _build_generic_skeleton
+}
+
+
+def _domainkey_to_tamyeez(key: DomainKey) -> str | None:
+    """Return 'مدني' / 'جنائي' / 'عام' — or None if unmapped."""
+    return _DOMAINKEY_TAMYEEZ.get(key)
+
+
 def detect_intent(query: str) -> Intent:
     """Drafting intent is detected on the NORMALIZED Arabic form so
     diacritics and "لي / لنا" insertions do not break recognition."""
@@ -449,6 +488,20 @@ def _build_generic_skeleton(
                 weight=0.5,
             )
             drafting_mode = DraftingMode.CONDITIONAL_DRAFT
+            # CP3: feed the Precedent Linker even for generic-skeleton
+            # memos — the query itself often has enough signal to find
+            # relevant Tamyeez rulings even when domain=UNKNOWN.
+            _concepts_for_memo: list[str] = []
+            try:
+                from core.legal_concepts import find_concepts_in_query
+                _concepts_for_memo = [
+                    str(c.get("term", ""))
+                    for c in (find_concepts_in_query(query) or [])
+                    if c.get("term")
+                ]
+            except Exception:
+                _concepts_for_memo = []
+
             memo = compose_memo(
                 domain_display = family_label or "المسألة القانونية",
                 drafting_mode  = drafting_mode,
@@ -458,6 +511,10 @@ def _build_generic_skeleton(
                 established    = meaningful_facts[:4] or user_facts[:4],
                 missing        = missing,
                 user_facts     = user_facts,
+                # CP3 additions:
+                query          = query,
+                corpus_domain  = None,  # UNKNOWN — let linker scan all
+                concepts       = _concepts_for_memo,
             )
 
     return Response(
@@ -522,6 +579,22 @@ def answer(query: str) -> Response:
     memo_text: str | None = None
     if intent == Intent.DRAFTING:
         drafting_mode = select_drafting_mode(reasoning)
+        # CP3 · Phase 2 Layer 2: feed the Precedent Linker with the
+        # signals it needs — raw query, our Tamyeez bucket (derived
+        # from the DomainKey → {مدني, جنائي, عام}), and any concepts
+        # extracted from legal_concepts. All optional for back-compat.
+        _tamyeez_hint = _domainkey_to_tamyeez(domain_key)
+        _concepts_for_memo: list[str] = []
+        try:
+            from core.legal_concepts import find_concepts_in_query
+            _concepts_for_memo = [
+                str(c.get("term", ""))
+                for c in (find_concepts_in_query(q) or [])
+                if c.get("term")
+            ]
+        except Exception:
+            _concepts_for_memo = []
+
         memo_text = compose_memo(
             domain_display = domain.display_name,
             drafting_mode  = drafting_mode,
@@ -532,6 +605,10 @@ def answer(query: str) -> Response:
             missing        = missing,
             user_facts     = user_facts,
             domain         = domain,
+            # CP3 additions:
+            query          = q,
+            corpus_domain  = _tamyeez_hint,
+            concepts       = _concepts_for_memo,
         )
 
     return Response(

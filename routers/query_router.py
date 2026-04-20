@@ -78,6 +78,24 @@ except Exception as _lc_err:  # pragma: no cover — degrade open
         type(_lc_err).__name__,
     )
 
+# ── Precedent Linker (Phase 2 · Layer 2) — Tamyeez rulings retrieval ──
+try:
+    from core.precedent_linker import (
+        find_relevant_precedents_augmented as _pl_find,
+        build_precedent_block as _pl_build_block,
+        verify_precedent_references_in_answer as _pl_verify,
+    )
+    _PRECEDENT_AVAILABLE = True
+except Exception as _pl_err:  # pragma: no cover — degrade open
+    _PRECEDENT_AVAILABLE = False
+    async def _pl_find(*_a, **_k): return []  # type: ignore
+    _pl_build_block = lambda *_a, **_k: ""  # type: ignore
+    _pl_verify = lambda a, _p: (a, [])  # type: ignore
+    logging.getLogger(__name__).warning(
+        "precedent_linker unavailable (%s) — Tamyeez retrieval disabled",
+        type(_pl_err).__name__,
+    )
+
 # ── Optional imports for Phase 2/3 handlers (lazy — degrade on miss) ──
 import asyncio
 from core import app_state as _app_state
@@ -1084,7 +1102,40 @@ async def handle_general(
             except Exception as _ci_err:
                 log.debug("concept_injection miss: %s", _ci_err)
 
-        system = EXPERT_SYSTEM + history_note + _prev_facts + _concept_context + (
+        # ═══ Precedent Linker (Phase 2 · Layer 2) ═══
+        # Retrieve 2-3 relevant Tamyeez rulings and inject them into the
+        # system prompt right after the concept definitions. The wrapper
+        # (find_relevant_precedents_augmented) handles:
+        #   • query augmentation (colloquial → legal diction)
+        #   • corpus-domain → tamyeez-bucket mapping (F3-defensive)
+        #   • ef_search bump for recall
+        #   • fallback to unaugmented retrieval if augmented returns 0
+        # Degrades open: any failure → empty block → no effect on answer.
+        _precedent_block = ""
+        _provided_precedents: list = []
+        if _PRECEDENT_AVAILABLE and not is_short_followup:
+            try:
+                _provided_precedents = await _pl_find(
+                    query=query,
+                    corpus_domain=query_domain,
+                    concepts=_concept_terms,
+                )
+                if _provided_precedents:
+                    _precedent_block = _pl_build_block(_provided_precedents)
+                    log.info(
+                        "precedent_linker: injected %d ruling(s) — "
+                        "domains=%s cases=%s",
+                        len(_provided_precedents),
+                        [p.domain for p in _provided_precedents],
+                        [p.case_number or p.internal_ref
+                         for p in _provided_precedents],
+                    )
+            except Exception as _pl_err_rt:
+                log.warning("precedent_linker failed: %s", _pl_err_rt)
+                _precedent_block = ""
+                _provided_precedents = []
+
+        system = EXPERT_SYSTEM + history_note + _prev_facts + _concept_context + _precedent_block + (
             "\n\n═══ وضع المساعد التفاعلي ═══\n"
             "• أجب مباشرة بالتفصيل القانوني ثم اختم بتوصية مراجعة محامٍ.\n"
             "• لا تكتب مذكرة إلا إذا طلب ذلك صراحة.\n"
@@ -1124,9 +1175,31 @@ async def handle_general(
 
         # ── Persist facts from this answer for future self-consistency ──
         _full = "".join(_answer_parts)
+
+        # ═══ Precedent Hallucination Guard (Phase 2 · Layer 2) ═══
+        # Scan the completed answer for case-number citations. Any cite
+        # that is NOT in _provided_precedents is rewritten to a safe
+        # fallback ("مبدأ مستقر لمحكمة التمييز"). The rewrite goes into
+        # answer_memory so future turns don't compound the hallucination.
+        # The user-visible stream already flushed — we can't rewrite it
+        # in flight — but we log + clean for memory + future turns.
+        _full_for_memory = _full
+        if _PRECEDENT_AVAILABLE and _full:
+            try:
+                _cleaned, _halluc = _pl_verify(_full, _provided_precedents)
+                if _halluc:
+                    _full_for_memory = _cleaned
+                    log.info(
+                        "precedent_hallucination_guard: cleaned %d "
+                        "ref(s) — %s",
+                        len(_halluc), _halluc,
+                    )
+            except Exception as _pl_g_err:
+                log.debug("precedent guard miss: %s", _pl_g_err)
+
         try:
-            if _full:
-                _store_answer_facts(sid, _full, query)
+            if _full_for_memory:
+                _store_answer_facts(sid, _full_for_memory, query)
         except Exception as _mem_err:
             log.debug("answer_memory store wrap: %s", _mem_err)
 

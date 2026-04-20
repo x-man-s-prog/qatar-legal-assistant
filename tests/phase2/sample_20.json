@@ -1,0 +1,843 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "created_at": "2026-04-20T06:15:00Z",
+    "purpose": "CP3.4 threshold-tuning ground truth. Hand-curated gold set used to measure precedent_linker precision/recall across the threshold sweep. NOT training data; NOT regression oracle.",
+    "distribution": {
+      "total": 20,
+      "مدني": 12,
+      "جنائي": 8,
+      "عام": 0
+    },
+    "excluded_domain": {
+      "name": "عام",
+      "reason": "Structural finding: 'عام' bucket in Tameez = 69 chunks (0.6% of corpus). Content breakdown: ~60% personal-status (nafaqa/hadana/family), ~15% court-organization, ~15% procedural edges, ~10% royal decrees. Admin/constitutional topics live in 'مدني'. A 4-query sub-sample targeting this bucket was attempted and dropped after probes showed min-hit-count failures (e.g., 'توزيع العمل بين دوائر التمييز' → 5 hits). Acceptable 'عام' overlap preserved as tolerance field on s6.",
+      "handled_via": [
+        "s6 acceptable_secondary_domain='عام' (nafaqa — a case the mapper may route to عام)",
+        "s10 dual_domain_secondary='مدني' (civil-liability spillover for employee خيانة أمانة)"
+      ]
+    },
+    "terminology_audit": {
+      "purpose": "Document Egyptian vs Qatari legal terminology mismatches discovered during pre-extraction SQL probes. All 4 originally-phrased queries returned 0–3 hits; Qatari-native phrasings returned ≥10.",
+      "corrections_applied": [
+        {
+          "original_egyptian": "الطعن بالنقض",
+          "qatari_replacement": "الطعن بالتمييز",
+          "egyptian_hits": 0,
+          "qatari_hits": 552,
+          "note": "Qatar's court of cassation is 'محكمة التمييز' not 'محكمة النقض'. This affects all جنائي queries indirectly."
+        },
+        {
+          "original_egyptian": "المسؤولية التقصيرية",
+          "qatari_replacement": "الفعل الضار / تقدير التعويض",
+          "egyptian_hits": 0,
+          "qatari_hits_فعل_ضار": 10,
+          "qatari_hits_تقدير_تعويض": 138,
+          "note": "Qatari jurisprudence uses 'الفعل الضار' or references it via 'تقدير التعويض'. Dropped as standalone query; tort concept absorbed into s3/s5."
+        },
+        {
+          "original_egyptian": "الضرر المعنوي / تعويض أدبي",
+          "qatari_replacement": "الضرر الأدبي",
+          "egyptian_hits": 0,
+          "qatari_hits": 15,
+          "note": "Qatari term is 'الضرر الأدبي' not 'الضرر المعنوي'. Applied to s3."
+        },
+        {
+          "original_egyptian": "رد الاعتبار",
+          "qatari_replacement": "الاشتراك في الجريمة (query replaced)",
+          "egyptian_hits": 0,
+          "qatari_hits_for_replacement": 72,
+          "note": "Structural finding: rehabilitation rulings don't reach cassation in Qatar. Query entirely replaced with s13_new='الاشتراك في الجريمة وصوره'."
+        }
+      ]
+    },
+    "min_hits_threshold": 10,
+    "gold_extraction_rules": {
+      "pool_size": "top 10 by cosine similarity (pgvector HNSW ef_search=200)",
+      "embedding_model": "nomic-embed-text via Ollama",
+      "corpus_filter": "chunks WHERE is_active=true AND law_name ILIKE '%أحكام محكمة التمييز%' AND domain IN (expected_domain[s])",
+      "selection_criteria": [
+        "Read each candidate's preview text carefully",
+        "Select 3–5 cases whose content DIRECTLY answers the query's core legal question",
+        "Reject procedural-only rulings that only mention a keyword incidentally (e.g., 'قصور في التسبيب' without the topic)",
+        "Reject rulings on tangential topics even at high similarity (semantic drift is common)",
+        "For queries whose top-10 contains only ruling_text chunks (case_number=null), record gold_ruling_article_numbers instead and set weak_gold_set=true",
+        "Document every rejection reason in gold_selection_notes"
+      ],
+      "case_number_format": "N/YYYY (e.g., '100/2016')",
+      "ruling_article_number_format": "حكم-تمييز-N-نص-M (used when principle chunk with case_number is absent from top-10)",
+      "note_on_weak_sets": "weak_gold_set=true does NOT mean the query is bad — it means the top-10 retrieval either returned too many procedural chunks OR the Tameez corpus genuinely has sparse principle-level coverage for this topic. Both cases are real signal for threshold tuning."
+    },
+    "quality_flag_definitions": {
+      "weak_gold_set": "True when <3 case_numbers selected OR only ruling_text chunks matched (indicates threshold-tuning headroom will be limited for this query)",
+      "dual_domain": "True when the query legitimately spans two domains (s10 only)",
+      "topic_intersection": "True when the query's topic spans a secondary bucket without being truly dual-domain (s6 only — nafaqa sits between مدني and عام)"
+    },
+    "evaluation_framework": {
+      "category_A_strong_gold": [
+        "s1",
+        "s2",
+        "s4",
+        "s12_new",
+        "s16"
+      ],
+      "category_B_medium_gold": [
+        "s3",
+        "s5",
+        "s7",
+        "s11",
+        "s13_new",
+        "s14_new",
+        "s19_civil",
+        "s22"
+      ],
+      "category_C_negative_tests": [
+        "s6",
+        "s8",
+        "s9",
+        "s10",
+        "s15",
+        "s20_civil",
+        "s21_new"
+      ],
+      "primary_metric": "precision@3 on Category A only",
+      "secondary_metric_1": "silence_rate on Category C (should return [] or low-similarity)",
+      "secondary_metric_2": "noise_rate on Category C (manual qualitative review after sweep)",
+      "threshold_optimization_target": "Maximize (precision_A - noise_C)",
+      "structural_finding": "zero-hit queries (Category C) exist because Tameez principle chunks on abstract topics (تقادم/انقضاء/رهن) are almost always embedded in specific-case context, so embedding similarity does not retrieve them despite ILIKE keyword matches >= 10. This is a property of the data, not a bug in retrieval.",
+      "noise_flag_rule": "If same case_number appears in >= 3 queries with similarity > 0.75 across the sweep, flag as embedding-space-flatness indicator"
+    }
+  },
+  "samples": [
+    {
+      "id": "s1",
+      "query": "التزامات المؤجر والمستأجر في عقد الإيجار",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "A",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "52/2007",
+        "88/2012",
+        "159/2012",
+        "14/2007"
+      ],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "SELECT id, content, domain, article_number, 1 - (embedding <=> $1::vector) AS similarity FROM chunks WHERE is_active=true AND law_name ILIKE '%أحكام محكمة التمييز%' AND domain='مدني' ORDER BY embedding <=> $1::vector LIMIT 10",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "52/2007": "تعريف عقد الإيجار + أركان عقد الإيجار — core definition (sim=0.8393)",
+          "88/2012": "حقوق والتزامات طرفي عقد الإيجار — direct topic hit (sim=0.8332)",
+          "159/2012": "عقد رضائي + سلطان الإرادة — foundational framing (sim=0.8287)",
+          "14/2007": "أركان عقد الإيجار + قواعد القانون المدني — structural (sim=0.8277)"
+        },
+        "rejected": {
+          "258/2016": "Top similarity (0.8415) but procedural — only about committee jurisdiction over sale-with-ownership clause. Not about obligations.",
+          "22/2007": "About إثبات بالبينة, unrelated to lease obligations.",
+          "58/2007": "Consolidated into s2 (فسخ) — tangentially mentions عدم تنفيذ التزاماته but topic is فسخ."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": false,
+        "dual_domain": false,
+        "topic_intersection": false
+      },
+      "mean_similarity_of_gold": 0.8322
+    },
+    {
+      "id": "s2",
+      "query": "فسخ عقد الإيجار للإخلال بأداء الأجرة وإجراءات الإخلاء",
+      "expected_domain": "مدني",
+      "expected_kind": "complex",
+      "evaluation_category": "A",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "100/2016",
+        "58/2007",
+        "168/2012",
+        "91/2015"
+      ],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "100/2016": "فسخ العقد + آثار الفسخ — top-1 hit (sim=0.7827)",
+          "58/2007": "فسخ عقد الإيجار بعد البدء في تنفيذه + المسئولية العقدية — doctrinal (sim=0.7706)",
+          "168/2012": "فسخ عقد الإيجار + تسليم العين المؤجرة — directly addresses الإخلاء (sim=0.7594)",
+          "91/2015": "فسخ العقد + عودة المتعاقدين إلى الحالة السابقة — core doctrine (sim=0.7617)"
+        },
+        "rejected": {
+          "52/2007": "Definition only — not about فسخ.",
+          "20/2006": "انتهاء عقد الإيجار (broader than فسخ للإخلال) — overlapping but not core.",
+          "191/نص-2": "About تعاقد بالتسخير, unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": false,
+        "dual_domain": false,
+        "topic_intersection": false
+      },
+      "mean_similarity_of_gold": 0.7686
+    },
+    {
+      "id": "s3",
+      "query": "الضرر الأدبي وتقدير التعويض عنه في القانون القطري",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1500-نص-1",
+        "حكم-تمييز-1288-نص-2"
+      ],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted_ruling_text": {
+          "حكم-تمييز-1500-نص-1": "Core direct hit: 'تقدير التعويض...جابراً للضرر الأدبي الذي ألم بالمطعون ضدها' (sim=0.8294) — no case_number extractable from chunk.",
+          "حكم-تمييز-1288-نص-2": "'تقدير الضرر وتحديد التعويض الجابر له من مسائل الواقع' (sim=0.8282) — no case_number."
+        },
+        "rejected": {
+          "117023, 113133, 113108": "High similarity (0.83+) but about نزع ملكية/إقرار مركب — semantic drift, not الضرر الأدبي.",
+          "122298, 123089, 122272": "Duplicate content about تفسير الحكم — unrelated.",
+          "120395": "About تقادم الدعوى — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Top-10 returned only ruling_text chunks (case_number=null) for direct hits. No principle-level chunks for 'الضرر الأدبي' surfaced in top-10 — the principle side of Tameez rulings with this concept is sparse."
+      },
+      "mean_similarity_of_gold": 0.8288
+    },
+    {
+      "id": "s4",
+      "query": "حجية الأمر المقضي ومتى يجوز إعادة النظر في الحكم",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "A",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "124/2016",
+        "104/2006"
+      ],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1880-نص-4"
+      ],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "124/2016": "المنع من إعادة نظر النزاع + وحدة المسألة + استقرار حقيقتها بالحكم الأول — core doctrine (sim=0.8368)",
+          "104/2006": "المنع من معاودة النزاع + وحدة الخصوم والموضوع والسبب — foundational res-judicata statement (sim=0.8285, via ملخص chunk 113415)"
+        },
+        "accepted_ruling_text": {
+          "حكم-تمييز-1880-نص-4": "'تكون للحكم حجيته رغم عدم ولاية المحكمة التي أصدرته' — حجية in admin/civil overlap (sim=0.8333, no case_number)."
+        },
+        "rejected": {
+          "224/2016 (chunk 118825)": "Top similarity but about انقطاع سير الجلسات — procedural, not حجية.",
+          "239/نص-5": "About اتحادات رياضية — unrelated.",
+          "258/2016": "عقد إيجار — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": false,
+        "dual_domain": false,
+        "topic_intersection": false
+      },
+      "mean_similarity_of_gold": 0.8327
+    },
+    {
+      "id": "s5",
+      "query": "الفصل التعسفي ومقدار التعويض المستحق للعامل",
+      "expected_domain": "مدني",
+      "expected_kind": "complex",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1294-نص-4"
+      ],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted_ruling_text": {
+          "حكم-تمييز-1294-نص-4": "Core direct: 'أحقيته في التعويض عن الفصل التعسفي' (sim=0.8015, no case_number)"
+        },
+        "rejected": {
+          "19/2007": "About النيابة الاتفاقية (agency) — unrelated.",
+          "89/2016": "About المساس بمصلحة مشروعة/ضرر مادي — tangential tort doctrine, not labor.",
+          "122306, 122960": "نزع ملكية / إيجار — unrelated.",
+          "115180": "جريمة شيك — unrelated.",
+          "89/2011, 16/2013": "Procedural-only (قصور, تشريع عام) — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Only 1 direct match across entire top-10. Labor-specific cases (الفصل التعسفي) are underrepresented in the مدني bucket of Tameez — most labor disputes resolve at appellate level. Expect low recall — threshold tuning should not penalize this query heavily."
+      },
+      "mean_similarity_of_gold": 0.8015
+    },
+    {
+      "id": "s6",
+      "query": "نفقة الزوجة بعد الطلاق ومتى تسقط",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "acceptable_secondary_domain": "عام",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "secondary_gold_for_tolerance": {
+        "domain": "عام",
+        "gold_case_numbers": [
+          "13/2006"
+        ],
+        "gold_ruling_article_numbers": [
+          "حكم-تمييز-149-نص-3"
+        ]
+      },
+      "gold_extraction_sql": "Primary: domain='مدني'. Secondary: re-ran with domain='عام' for tolerance window.",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "primary_rejected": "Entire top-10 in مدني bucket unrelated (نزع ملكية, بطلان إعلان, إيجار, مؤجل صداق). Not a single direct nafaqa hit.",
+        "secondary_accepted": {
+          "13/2006": "'نفقة + سلطة المحكمة في تقدير النفقة' — core principle (sim=0.7663 in عام pool)",
+          "حكم-تمييز-149-نص-3": "'نفقة الزوجة واجبة على الزوج...رزق الزوجة الذي تقوم به حياتها' — direct ruling_text (sim=0.7764)"
+        },
+        "secondary_rejected": {
+          "32/2006 (multiple chunks)": "About نفقة الأولاد not نفقة الزوجة — tangential family-law but off-topic.",
+          "53/2007": "إجراءات التقاضي — procedural.",
+          "chunks 113179, 112740, 113622": "حضانة / tنظيم داخلي / procedural — unrelated."
+        }
+      },
+      "scoring": {
+        "policy": "Primary metric = recall over gold_case_numbers (empty). Secondary metric = recall over secondary_gold_for_tolerance. If linker returns ANY from secondary, count as partial hit (not penalty). If linker misroutes to جنائي, full miss.",
+        "interpretation": "Tolerance acknowledges real ambiguity in Tameez: nafaqa rulings scatter across مدني/عام. A correct linker may retrieve from either."
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": true,
+        "weakness_reason": "Primary gold empty — nafaqa not retrievable from مدني bucket in top-10. Secondary عام pool has the right cases. This is the main reason 'عام' sub-sample was dropped — its best cases belong to personal-status and spill over to مدني queries."
+      },
+      "mean_similarity_of_gold": 0.7714
+    },
+    {
+      "id": "s7",
+      "query": "حضانة الأطفال وضم المحضون للأم المطلقة",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "8/2007"
+      ],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "8/2007": "حضانة النساء + انتهاؤها بالسن + تخيير المحضون — core custody doctrine (sim=0.8215)"
+        },
+        "rejected": {
+          "115267": "About شهادة + أقوال متهم — criminal procedure, not custody.",
+          "74/2011 (both chunks)": "About الطلب في الدعوي / محكمة الموضوع — procedural.",
+          "60/2016": "موانع سماع الدعوى — procedural.",
+          "chunks 116057, 112472, 114858": "عقد + نقل + عقوبات — unrelated.",
+          "113108, 113133": "نزع ملكية — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": true,
+        "weakness_reason": "Only 1 direct match. حضانة rulings also scatter across عام (same structural issue as s6). Threshold tuning should treat ضم المحضون as legitimately hard recall."
+      },
+      "mean_similarity_of_gold": 0.8215
+    },
+    {
+      "id": "s8",
+      "query": "التقادم المدني وانقطاعه في القانون القطري",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": "NONE — no chunk in top-10 directly addresses التقادم المدني + انقطاعه.",
+        "rejected": {
+          "113108, 113133 (0.84+)": "Top similarity but نزع ملكية — semantic drift.",
+          "116891": "بطلان عقد عمل — unrelated.",
+          "114679": "قرض بنكي + فوائد — tangential.",
+          "114193": "عقد نقل — unrelated.",
+          "123037": "اتفاق بالنظام العام — unrelated.",
+          "122272, 123089, 122298": "طلب تفسير الحكم (duplicate) — unrelated.",
+          "112388": "ديون مكاتب سفريات — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Zero direct matches. This is a THRESHOLD-TUNING SIGNAL: the query 'التقادم المدني' is too abstract — Tameez principles on التقادم are usually tied to specific contract types (عمل, نقل, تأمين). The linker will likely miss this entirely regardless of threshold. Preserved as negative data-point for the sweep."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s19_civil",
+      "query": "شروط صحة عقد البيع والتزامات البائع",
+      "expected_domain": "مدني",
+      "expected_kind": "complex",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "184/2016",
+        "392/2015"
+      ],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "184/2016": "دعوى صحة ونفاذ عقد البيع + بحث انعقاد العقد ومدى صحته + ملكية البائع — direct core (sim=0.8124, 2 chunks)",
+          "392/2015": "دعوى صحة ونفاذ عقد البيع : شروط قبولها — direct (sim=0.8114)"
+        },
+        "rejected": {
+          "224/2016 (chunk 118833)": "Top similarity but about قبض الموهوب له (gift, not sale).",
+          "25/2016, 1/2014": "صحة القرار الإداري — administrative, not sale contracts.",
+          "253/2016": "إقامة بناء — tangential.",
+          "138/2016": "شروط قبول الدعوى — procedural.",
+          "6/2006": "صحة الخصومة — procedural."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Only 2 principle chunks directly on عقد البيع. Top-10 heavily contaminated with procedural/administrative chunks. Moderate but usable gold set."
+      },
+      "mean_similarity_of_gold": 0.8119
+    },
+    {
+      "id": "s20_civil",
+      "query": "انقضاء الالتزام بالوفاء أو بغيره من المبرئات",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": "NONE — zero direct matches for انقضاء الالتزام في top-10.",
+        "rejected": {
+          "119156 (0.8385)": "إشكال في التنفيذ — procedural, not obligations extinguishment.",
+          "123037": "اتفاق بالنظام العام — unrelated.",
+          "196/2010": "أسباب الطعن — procedural.",
+          "224/2016 (both chunks)": "إثبات بالكتابة/بالبينة — evidence rules.",
+          "81/2007": "زيادة القضاة الحضور — procedural.",
+          "14/2007, 11/2007": "إيجار ملك الغير — duplicate, unrelated.",
+          "45/2007": "السمة التجارية — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Zero direct matches. Query is too abstract — top-10 diverges to procedural/evidentiary chunks. Similar pattern to s8. Preserved as a broadly-phrased negative test case."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s21_new",
+      "query": "الرهن الرسمي وحقوق الدائن المرتهن",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": "NONE — zero matches for الرهن الرسمي in top-10.",
+        "rejected": {
+          "115297": "مياه إقليمية + اعترافات — unrelated.",
+          "122215": "بطلان إعلان بصحيفة الدعوى — procedural.",
+          "10/2011, 77/2014": "سلطة قاضي الموضوع — procedural.",
+          "115932": "تعدي على أملاك الدولة + شغل طريق — unrelated.",
+          "116723": "تقادم — unrelated to mortgage.",
+          "114679": "قرض + فوائد — tangential (debt but not secured).",
+          "122604": "مؤجل الصداق — family law.",
+          "120083": "تأمين ضد الحريق — insurance.",
+          "114644": "قرار إداري — administrative."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Zero direct matches. الرهن الرسمي is a specific property-law topic with sparse Tameez coverage. Highest sim (0.7899) is from unrelated chunk — corpus genuinely lacks principle-level mortgage rulings. Preserved as sparse-topic negative case."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s22",
+      "query": "الميراث وقسمة التركة في القانون القطري",
+      "expected_domain": "مدني",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-246-نص-5",
+        "حكم-تمييز-1713-نص-3"
+      ],
+      "gold_extraction_sql": "same as s1, domain='مدني'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted_ruling_text": {
+          "حكم-تمييز-246-نص-5": "'مصدر الحق...قول وتصرف والد المتخاصمين الذي أعطى لهم ملكية عقارات' — inheritance distribution (sim=0.8366)",
+          "حكم-تمييز-1713-نص-3": "'تسجيل أرض المورث + ملكية المورث + الشريعة الإسلامية + وضع اليد' — inheritance + Islamic law (sim=0.8344)"
+        },
+        "rejected": {
+          "117023 (0.8512)": "إقرار مركب — unrelated to inheritance.",
+          "114679": "قرض بنكي — unrelated.",
+          "114644": "قرار إداري — unrelated.",
+          "116723": "تقادم — unrelated.",
+          "119933, 117143": "الدية الشرعية — tangentially relates to post-death compensation but not إرث.",
+          "122215": "إعلان — procedural.",
+          "112921 (duplicate of 112908)": "Same content, counted once."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "2 ruling_text matches, no principle chunks with case_numbers. Inheritance principles live in Sharia-court rulings mostly, not Tameez civil. Limited gold set but usable."
+      },
+      "mean_similarity_of_gold": 0.8355
+    },
+    {
+      "id": "s9",
+      "query": "أركان جريمة السرقة والظروف المشددة",
+      "expected_domain": "جنائي",
+      "expected_kind": "complex",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": "NONE — zero direct matches for أركان جريمة السرقة + الظروف المشددة.",
+        "rejected": {
+          "78/2005": "القصد في شيك دون رصيد — different offense.",
+          "115497": "حيازة أشياء متحصلة من سرقة — tangential (receiving-stolen, not theft).",
+          "121787": "هتك العرض — unrelated.",
+          "118220": "دية شرعية — unrelated.",
+          "118656": "تنفيذ حكم — procedural.",
+          "114496, 115151 (duplicates)": "شرب الخمر — unrelated.",
+          "112548": "تصالح على شيك — unrelated.",
+          "119898": "تفتيش + مواد مخدرة — unrelated.",
+          "26/2013": "القتل العمد + الإقرار القضائي — wrong offense."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Zero matches despite sufficient جنائي corpus. Semantic similarity over-weighted the generic word 'جريمة' and pulled other offense types. Pure أركان السرقة principles are sparse in Tameez (most theft cases focus on procedural/evidence aspects). Preserved as negative signal — expect low recall regardless of threshold."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s10",
+      "query": "خيانة الأمانة من موظف والعقوبة المقررة",
+      "expected_domain": "جنائي",
+      "expected_kind": "complex",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "dual_domain_secondary": "مدني",
+      "gold_case_numbers_primary": [],
+      "gold_ruling_article_numbers_primary": [],
+      "gold_case_numbers_secondary": [],
+      "gold_ruling_article_numbers_secondary": [],
+      "gold_extraction_sql": "Primary: domain='جنائي'. Secondary: domain='مدني' (civil liability spillover).",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "primary_rejected": {
+          "115916": "جريمة الخطف بالتحيل — different offense.",
+          "121588": "قرينة البراءة — procedural.",
+          "115339, 122586 (duplicates)": "ميعاد الاستئناف — procedural.",
+          "27/2005": "حضور المحامي — procedural.",
+          "111815": "رفع الاستئناف من سجن — procedural.",
+          "120906": "استقدام عامل + صلح — unrelated.",
+          "122789, 119979, 118252": "Procedural/evidence — unrelated."
+        },
+        "secondary_rejected": {
+          "113067 (0.8236)": "خطأ طبي — unrelated.",
+          "224/2016 (both chunks)": "القانون الخاص/العام — abstract.",
+          "111/2014": "وضع الموظف تحت الاختبار — employment admin, not criminal breach.",
+          "122451": "موظفين مدنيين بالشركة — administrative.",
+          "370/ملخص": "إدارة قضايا الدولة — unrelated.",
+          "116348, 82/2011, 122405, 116769": "Procedural/fees — unrelated."
+        },
+        "primary_accepted": "NONE — pure خيانة أمانة من موظف is absent from top-10 primary pool.",
+        "secondary_accepted": "NONE — civil-liability spillover from employee breach not surfaced either."
+      },
+      "scoring": {
+        "primary_metric": "Recall over gold_case_numbers_primary (empty set → any non-empty linker output for خيانة أمانة counts as proxy-positive by keyword check in content).",
+        "secondary_metric": "Recall over gold_case_numbers_secondary (also empty). Ambiguity tolerated.",
+        "interpretation": "Both sides empty → this query is a STRUCTURAL null case. The linker's job on s10 is binary: does it find ANY cases whose content mentions خيانة/أمانة/موظف coherently? If yes, consider pass. Threshold tuning CANNOT use s10 for precision/recall — only for 'does augmentation help' diagnosis."
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": true,
+        "topic_intersection": false,
+        "weakness_reason": "Dual-domain query but BOTH domains' top-10 failed to retrieve خيانة أمانة من موظف. The specific intersection (public-employee breach-of-trust) has very few Tameez rulings. Main threshold-tuning signal: augmentation MUST add something here or s10 is a blind spot."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s11",
+      "query": "شروط صحة الاعتراف في التحقيق الجنائي",
+      "expected_domain": "جنائي",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1449-نص-11",
+        "حكم-تمييز-1708-نص-7"
+      ],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted_ruling_text": {
+          "حكم-تمييز-1449-نص-11": "Core direct: 'الاعتراف في المسائل الجنائية...تقدير صحته ومدى صدقه وقيمته في الإثبات...انتزع منه بطريق الإكراه' (sim=0.8019)",
+          "حكم-تمييز-1708-نص-7": "'اطمئنانه إلى صحة إقرار الطاعن بالشرطة واعتراف المحكوم عليها بالتحقيقات' (sim=0.8001)"
+        },
+        "rejected": {
+          "9/2005": "الصورة الفوتوغرافية كدليل — evidence but not confession.",
+          "195/نص-2": "انتحال صفة — unrelated.",
+          "1559/نص-2": "شرع في قتل — unrelated.",
+          "12/2006": "صفع المجني عليه — unrelated.",
+          "1178/نص-3": "رسائل — unrelated.",
+          "1902/نص-3": "شيك — unrelated.",
+          "1886/نص-3": "سرقة — tangential.",
+          "1651/نص-5": "اعترافات المتهم in murder — tangential."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Only ruling_text matches. No principle chunk on الاعتراف in top-10. Moderate — the rulings are substantive on the topic."
+      },
+      "mean_similarity_of_gold": 0.801
+    },
+    {
+      "id": "s12_new",
+      "query": "انقضاء الدعوى الجنائية بمضي المدة",
+      "expected_domain": "جنائي",
+      "expected_kind": "simple",
+      "evaluation_category": "A",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "3/2014",
+        "215/2015"
+      ],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1821-نص-2",
+        "حكم-تمييز-1863-نص-3"
+      ],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "3/2014": "Core principle — 'تقادم/دعوي جنائية انقضاؤها بمضي المدة/الدفع بانقضاء الدعوى الجنائية بمضي المدة' (sim=0.826) + ruling_text 1839-نص-6 (sim=0.8159) from same case.",
+          "215/2015": "'شيك بدون رصيد + الدفع بانقضاء الدعوى الجنائية بمضي المدة' — core application (sim=0.8081)"
+        },
+        "accepted_ruling_text": {
+          "حكم-تمييز-1821-نص-2": "'انقضاء الدعوى الجنائية + سداد الشيك → تصالح' (sim=0.8293, no case_number)",
+          "حكم-تمييز-1863-نص-3": "'قضاؤه بانقضاء الدعوى الجنائية بمضي المدة...أكثر من ثلاث سنوات' (sim=0.8076)"
+        },
+        "rejected": {
+          "69/2005": "قانون العقوبات الجديد — tangential.",
+          "7/2016": "الدفع ببطلان القبض — different defense.",
+          "1425-نص-4": "وصف الحكم — procedural.",
+          "1680-نص-2": "اقتنع بصحة المعلومات — unrelated.",
+          "989-نص-5": "عدم توافر شروط قبول الدعوى — different basis."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": false,
+        "dual_domain": false,
+        "topic_intersection": false
+      },
+      "mean_similarity_of_gold": 0.8175
+    },
+    {
+      "id": "s13_new",
+      "query": "الاشتراك في الجريمة وصوره",
+      "expected_domain": "جنائي",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1819-نص-8",
+        "حكم-تمييز-1557-نص-5"
+      ],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted_ruling_text": {
+          "حكم-تمييز-1819-نص-8": "Core: 'الشريك على ارتكاب الجريمة + ثبوت الاشتراك بطريق الاتفاق والمساعدة' (sim=0.7688)",
+          "حكم-تمييز-1557-نص-5": "'الاشتراك في جريمة التزوير + عوقب بعقوبتها' (sim=0.7584)"
+        },
+        "rejected": {
+          "78/2005": "القصد في شيك — unrelated.",
+          "1651/نص-2": "صورة + إسناد — unrelated.",
+          "203/نص-1": "رشوة + اشترك في إعداد — tangential (procedural).",
+          "1857/نص-25": "قتل + أسلحة — unrelated.",
+          "1855/نص-1": "هتك عرض — unrelated.",
+          "1557/نص-3": "تزوير + اتفاق مع آخر — related but more about تزوير than الاشتراك.",
+          "1922/نص-3": "إشارات مرور — unrelated.",
+          "183/نص-1": "رشوة — tangential."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "No principle chunks on الاشتراك surfaced. Two ruling_text matches — acceptable but not ideal."
+      },
+      "mean_similarity_of_gold": 0.7636
+    },
+    {
+      "id": "s14_new",
+      "query": "القصد الجنائي في الجرائم العمدية",
+      "expected_domain": "جنائي",
+      "expected_kind": "simple",
+      "evaluation_category": "B",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "202/2015"
+      ],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1461-نص-2"
+      ],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "202/2015": "'مواد مخدرة + قصد جنائي + سلطة محكمة الموضوع في تقدير توافر القصد الجنائي' — direct on القصد (sim=0.7922)"
+        },
+        "accepted_ruling_text": {
+          "حكم-تمييز-1461-نص-2": "'كافة العناصر القانونية لجريمة عرض الرشوة بما في ذلك القصد الجنائي + دفاع الطاعن بانتفاء القصد الجنائي' (sim=0.7961)"
+        },
+        "rejected": {
+          "1438/نص-7, 1438/نص-2 (duplicates)": "دعامة أخرى صحيحة — procedural.",
+          "1853/نص-8": "تفتيش سيارة — unrelated.",
+          "1107/نص-4, 1380/نص-4 (duplicates)": "تضليل القضاء — tangential.",
+          "1436/نص-3": "شيك + حبس الشيكات — tangential.",
+          "1116/نص-5, 1389/نص-5 (duplicates)": "مواد مخدرة + قصد الاتجار — tangential (mentions قصد الاتجار not القصد الجنائي العام)."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Only 1 principle match. Query's abstraction ('الجرائم العمدية') pulls procedural chunks. Moderate gold."
+      },
+      "mean_similarity_of_gold": 0.7942
+    },
+    {
+      "id": "s15",
+      "query": "الشروع في جريمة السرقة والعقوبة المقررة",
+      "expected_domain": "جنائي",
+      "expected_kind": "complex",
+      "evaluation_category": "C",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [],
+      "gold_ruling_article_numbers": [],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": "NONE — zero direct matches for الشروع في السرقة.",
+        "rejected": {
+          "1055/نص-5, 1131/نص-5 (duplicates)": "شرب الخمر — unrelated.",
+          "1855/نص-1": "هتك العرض — unrelated.",
+          "1557/نص-5": "الاشتراك في التزوير — unrelated.",
+          "183/نص-1": "رشوة — unrelated.",
+          "1433/نص-12": "دية شرعية — unrelated.",
+          "195/نص-2": "انتحال صفة — unrelated.",
+          "1385/نص-2, 1112/نص-2 (duplicates)": "الدية الشرعية + القتل الخطأ — unrelated.",
+          "1651/نص-5": "قتل — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": true,
+        "dual_domain": false,
+        "topic_intersection": false,
+        "weakness_reason": "Zero matches for الشروع في السرقة. Similar pattern to s9 — generic crime vocabulary ('جريمة', 'السرقة') pulls unrelated offense chunks. الشروع as a concept is sparse in Tameez SRT-relevant rulings. Preserved as negative signal."
+      },
+      "mean_similarity_of_gold": null
+    },
+    {
+      "id": "s16",
+      "query": "بطلان التفتيش والقبض بدون إذن النيابة",
+      "expected_domain": "جنائي",
+      "expected_kind": "complex",
+      "evaluation_category": "A",
+      "hit_count_at_extraction": ">=10",
+      "gold_case_numbers": [
+        "7/2016",
+        "89/2016"
+      ],
+      "gold_ruling_article_numbers": [
+        "حكم-تمييز-1106-نص-3",
+        "حكم-تمييز-1379-نص-3",
+        "حكم-تمييز-1415-نص-4"
+      ],
+      "gold_extraction_sql": "same as s1, domain='جنائي'",
+      "gold_extraction_timestamp": "2026-04-20T06:13:28Z",
+      "gold_selection_notes": {
+        "accepted": {
+          "7/2016": "'قبض + الدفع ببطلان القبض + نيابة عامة' — core principle (sim=0.8286)",
+          "89/2016": "'الدفع ببطلان القبض والتفتيش' — core principle (sim=0.8247)"
+        },
+        "accepted_ruling_text": {
+          "حكم-تمييز-1106-نص-3": "'النيابة العامة + البطلان' — direct (sim=0.846)",
+          "حكم-تمييز-1379-نص-3": "Duplicate content of 1106 (NIAaba طعن) — both valid (sim=0.846)",
+          "حكم-تمييز-1415-نص-4": "'دفعه ببطلان إذن النيابة العامة بالقبض والتفتيش لعدم جدية التحريات' (sim=0.8457)"
+        },
+        "rejected": {
+          "1425/نص-4": "ميعاد الاستئناف — procedural.",
+          "1380/نص-4, 1107/نص-4 (duplicates)": "تضليل القضاء — unrelated.",
+          "1194/نص-4": "توكيل محامي — procedural.",
+          "1213/نص-2": "تزوير — unrelated."
+        }
+      },
+      "quality_flags": {
+        "weak_gold_set": false,
+        "dual_domain": false,
+        "topic_intersection": false
+      },
+      "mean_similarity_of_gold": 0.8382
+    }
+  ]
+}
