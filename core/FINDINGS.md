@@ -87,3 +87,20 @@ Short definitional queries ("ما عقوبة السرقة؟") don't benefit from
 **File:** /app/tests/phase2/sample_20.json
 
 **Use:** Future regression evaluation when embedding upgrade is applied.
+
+## 7. Async Pool Binding in Test Harness
+
+**Discovery (pre-Layer 3 verification):**
+Commit ff7b4f3 claimed 15/15 phase-2 tests passing. Re-verification
+showed 12/15 under pytest-asyncio — 3 tests failed due to event
+loop cross-binding in asyncpg pool.
+
+**Not a patch — fixed at source:**
+- tests/phase2/conftest.py manages event loop lifecycle per test
+- _reset_pool_state() helper cleans pool state between tests
+- Production runtime unaffected (verified by 50 HTTP integration tests)
+
+**Lesson captured:** Claims in commit messages must be verified
+under the claimed conditions, not assumed from partial runs.
+Session protocol updated: before any commit claiming N/N tests,
+run full suite in clean environment and capture output.
