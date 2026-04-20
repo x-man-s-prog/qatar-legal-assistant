@@ -1721,8 +1721,103 @@ def _detect_memo_topic(query: str) -> str:
     return "عام"
 
 
+# ─────────────────────────────────────────────────────────────────
+# Force-memo intent detection (closed-vocabulary, three-factor AND)
+# ─────────────────────────────────────────────────────────────────
+# Current ``phase0_router._MEMO_TRIGGERS`` is a flat substring list
+# centred on the imperative "اكتب". Queries like
+# "احتاجك تكتب لي مذكرة حضانة" match no trigger substring and fall
+# through to ``general``. See FINDING §11.
+#
+# A clearer, additive rule captures explicit memo intent:
+#     (memo VERB) AND (memo NOUN) AND (topic from DOMAIN_KEYWORDS)
+#
+# All three factors are closed lists or externally-managed (DOMAIN_KEYWORDS
+# in ``core/metadata_filter.py``). No regex, no parallel topic list.
+
+_MEMO_VERBS: tuple[str, ...] = (
+    # imperative + inflected forms used in Gulf Arabic memo requests.
+    "اكتب", "أكتب", "اكتبلي", "اكتبها", "اكتبوا",
+    "تكتب",              # "احتاجك تكتب", "ممكن تكتب"
+    "أعد", "اعد", "أعيد", "اعيد",
+    "صغ", "صيغ", "صِغ",
+    "جهز", "جهّز", "جهزلي", "جهّزلي",
+    "حرر", "حرّر",
+    "اعمل", "أعمل", "سوي", "سوّي",
+)
+
+_MEMO_NOUNS: tuple[str, ...] = (
+    "مذكرة", "مذكره",
+    "لائحة", "لائحه",
+    "عريضة", "عريضه",
+    "صحيفة دعوى", "صحيفه دعوى", "صحيفة دعوي", "صحيفه دعوي",
+)
+
+
+def _has_memo_verb(query_lower: str) -> bool:
+    """True iff query_lower contains any item from ``_MEMO_VERBS``.
+    Uses plain substring match — same convention as
+    ``phase0_router._MEMO_TRIGGERS`` and ``DOMAIN_KEYWORDS``."""
+    return any(v in query_lower for v in _MEMO_VERBS)
+
+
+def _has_memo_noun(query_lower: str) -> bool:
+    """True iff query_lower contains any item from ``_MEMO_NOUNS``."""
+    return any(n in query_lower for n in _MEMO_NOUNS)
+
+
+def _has_memo_topic(query_lower: str) -> bool:
+    """True iff query_lower contains any keyword from ``DOMAIN_KEYWORDS``.
+
+    ``DOMAIN_KEYWORDS`` is the **single source of truth** for topic
+    keywords (6 domains × ~8 keywords). We intentionally do NOT keep a
+    parallel list; a new topic entry added there flows here automatically.
+
+    Degrades open: if the import fails (unlikely — same repo), returns
+    False so force-memo simply no-ops and the normal phase0 pipeline
+    takes over.
+    """
+    try:
+        from core.metadata_filter import DOMAIN_KEYWORDS
+    except Exception:
+        return False
+    for domain_keywords in DOMAIN_KEYWORDS.values():
+        for kw in domain_keywords:
+            if kw in query_lower:
+                return True
+    return False
+
+
+def _is_force_memo_request(query: str) -> bool:
+    """Three-factor intent gate for memo requests.
+
+    Returns True iff the query contains a memo verb AND a memo noun AND
+    a topic keyword. Used as a pre-phase0 gate so memo intent survives
+    phrasings the substring-matcher in ``_MEMO_TRIGGERS`` misses
+    (e.g. "احتاجك تكتب لي مذكرة حضانة").
+
+    When this returns True the caller routes directly to
+    ``handle_memo_smart``, which itself decides between
+    ``memo_ask_details`` (no signals yet) and ``memo`` (details present).
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    return (
+        _has_memo_verb(q)
+        and _has_memo_noun(q)
+        and _has_memo_topic(q)
+    )
+
+
 def _count_signals(text: str) -> int:
-    """Rough signal count — names, numbers, dates, content length."""
+    """Rough signal count — names, numbers, dates, content length.
+
+    NOTE: kept as-is for backward compatibility with c1-c8 tests that
+    indirectly exercise this path. New long-conversation support uses
+    ``_compute_memo_signals`` below, which sweeps the full history
+    rather than a sliding window.
+    """
     if not text:
         return 0
     s = 0
@@ -1739,26 +1834,65 @@ def _count_signals(text: str) -> int:
     return s
 
 
+# ─────────────────────────────────────────────────────────────────
+# Full-history signal sweep (fix for the ``history[-8:]`` blind spot)
+# ─────────────────────────────────────────────────────────────────
+# Why this exists
+# ---------------
+# ``handle_memo_smart`` used to compute signals only over ``history[-8:]``.
+# In long conversations (≥ 10 turns) the rich-signal turn (names +
+# numbers + dates) gets pushed out of that window, so the handler
+# re-asks for details mid-memo. See FINDING §11.
+#
+# ``_compute_memo_signals`` sweeps EVERY user message in the supplied
+# history plus the current query, applies ``_count_signals`` per-source,
+# and sums. Per-source summation (rather than concatenation) lets names
+# and dates from different turns accumulate; concatenation would cap
+# them at +1 each globally.
+#
+# Pure function — no I/O, no clock, deterministic.
+
+def _compute_memo_signals(
+    history: list,
+    current_query: str,
+    topic: str,
+) -> int:
+    """Full-history signal count for memo detail sufficiency.
+
+    Scans ``current_query`` plus every user message in ``history``
+    (bounded in practice by the session LRU cap of ~50 turns) and
+    sums ``_count_signals`` per source.
+
+    ``topic`` is currently unused in the count itself — it is accepted
+    for future topic-specific weighting (e.g. weighing ``اسمه`` more
+    heavily for حضانة). Passing it makes the callsite self-documenting
+    and the unit test (cm.*signal_computation) explicit.
+    """
+    total = _count_signals(current_query or "")
+    for m in history or []:
+        if m.get("role") == "user":
+            content = m.get("content")
+            if content:
+                total += _count_signals(content)
+    return total
+
+
 async def handle_memo_smart(
     query: str, sid: str, history: list,
 ) -> StreamingResponse:
     topic = _detect_memo_topic(query)
 
-    # ═══ جمع كل المعلومات من المحادثة (أعمق من قبل) ═══
-    blob = query
+    # ═══ Topic recovery from any prior user turn ═══
+    # "اكتب المذكرة" as a standalone nag carries no topic keyword; pull
+    # the topic from the earliest user message that did mention one.
+    # We iterate ALL history (not just a window) — cheap (≤ 50 turns)
+    # and prevents loss in long sessions.
     all_user_msgs: list[str] = []
     if history:
-        # آخر 8 رسائل بدل 6 — لتفادي فقدان تفاصيل في محادثة طويلة
-        for m in history[-8:]:
+        for m in history:
             if m.get("role") == "user" and m.get("content"):
-                content = m["content"]
-                blob += " " + content
-                all_user_msgs.append(content)
+                all_user_msgs.append(m["content"])
 
-    signals = _count_signals(blob)
-
-    # إذا الموضوع لم يُكتشف من الرسالة الحالية — جرّب رسائل المستخدم السابقة
-    # لأن طلب "اكتب المذكرة" عادة لا يحمل كلمات مفتاحية (مثل "نفقة").
     if topic == "عام" and all_user_msgs:
         for prev in reversed(all_user_msgs):
             prev_topic = _detect_memo_topic(prev)
@@ -1771,21 +1905,12 @@ async def handle_memo_smart(
 
     gaps = _MEMO_GAPS.get(topic)
 
-    # ═══ إصلاح: إذا الرسالة الحالية أمر مختصر وكل التفاصيل في السابقة ═══
-    # السيناريو: "اكتب مذكرة نفقة" → النظام يسأل → المستخدمة تعطي كل
-    # التفاصيل في رسالة واحدة → تقول "يلا اكتب". في هذه الحالة signals
-    # الكلي كافٍ لكن الرسالة الحالية وحدها ضعيفة — نعتمد على الكلي.
-    if gaps and signals < gaps["min_signals"] and all_user_msgs:
-        if len(query.split()) <= 6:
-            prev_blob = " ".join(all_user_msgs)
-            prev_signals = _count_signals(prev_blob)
-            if prev_signals >= gaps["min_signals"]:
-                signals = prev_signals
-                log.info(
-                    "memo_smart: details found in prior messages "
-                    "(prev_signals=%d ≥ min=%d) — bypassing ask",
-                    prev_signals, gaps["min_signals"],
-                )
+    # ═══ Signal sufficiency — full-history sweep ═══
+    # Replaces the old ``history[-8:]`` window. Fixes the T10 regression
+    # where the rich-signal turn (names + numbers + dates) fell out of
+    # the window after ≥ 10 turns and caused ask-for-details to re-fire
+    # mid-memo. See FINDING §11.
+    signals = _compute_memo_signals(history or [], query, topic)
 
     if gaps and signals < gaps["min_signals"]:
         # Not enough info — ask smart questions
@@ -1899,6 +2024,22 @@ async def query_stream(req: QueryRequest, request: Request = None):
     if _bctx:
         _bctx.session_id = sid
         _bctx.query = q[:200]
+
+    # ═════════════════════════════════════════════════════════════════
+    # Force-Memo Intent Gate (runs BEFORE everything else)
+    # ─────────────────────────────────────────────────────────────────
+    # Catches memo requests that phase0's flat substring matcher misses
+    # because the user used a non-imperative verb form ("تكتب") or an
+    # uncommon phrasing. Intent = (memo verb) AND (memo noun) AND
+    # (topic keyword). When matched we route straight to
+    # handle_memo_smart which will either draft or ask for details
+    # based on signal sufficiency. See FINDING §11.
+    # ═════════════════════════════════════════════════════════════════
+    if _is_force_memo_request(q):
+        log.info(
+            "force_memo: intent detected (verb+noun+topic) → handle_memo_smart"
+        )
+        return await handle_memo_smart(q, sid, req.history or [])
 
     # ═════════════════════════════════════════════════════════════════
     # Memo Continuation Detection (runs BEFORE phase0_router)

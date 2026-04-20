@@ -176,3 +176,62 @@ PINGs the cached client before returning.
 **Validated:**
 - 30/30 phase3 tests pass in 1.27s total — PING overhead negligible.
 - Zero "Event loop is closed" errors in production path during CP2 runs.
+
+## 11. Memo Test Coverage Gap — Long Conversations
+
+**Discovery (user-reported production regression):**
+A real user submitted 10 turns across a custody-memo session. Starting
+at turn 4 the system returned "شرح عام عن الحضانة" instead of a memo,
+and by turn 10 had lost context entirely. Memo tests `c1-c8` all
+continued to pass during this incident, so the bug was invisible to
+CI.
+
+**Two compounding root causes:**
+
+1. **Sliding window `history[-8:]` in `handle_memo_smart`.**
+   Signal-sufficiency was computed only over the last 8 messages. In
+   a 10-turn conversation the rich-signal turn (T4: names, numbers,
+   dates) fell out of that window by T9, so the handler re-asked for
+   details mid-memo — identical to the user's "اكتب بالمعلومات
+   المتوفرة" final turn returning ``memo_ask_details``.
+
+2. **`phase0_router._MEMO_TRIGGERS` anchored on imperative "اكتب".**
+   The list has entries like `"اكتب مذكرة"` and `"احتاج مذكرة"`, but
+   misses `"تكتب"` (present tense) and `"احتاج منك تكتب"` variants.
+   The query "احتاجك تكتب لي مذكرة حضانة" routes to ``general`` under
+   the old matcher, which then produces a full LLM answer and drops
+   all memo context.
+
+**Why c1-c8 passed while production failed:**
+All c1-c8 histories are ≤ 4 messages — the 8-msg window always contains
+the signal-bearing turn. None of them exercise the verb-variant phrasing
+either. The tests were correct for their scope but their scope was too
+narrow. **The test suite proved the happy path, not the failure surface.**
+
+**Not a patch — root-cause fixes in two places:**
+
+- New ``_compute_memo_signals(history, current_query, topic)`` sweeps
+  the ENTIRE history (capped by the session LRU, ~50 turns) and sums
+  signals per source. ``_count_signals`` is retained unchanged for
+  backward compatibility with tests that exercise the single-blob
+  path.
+- New three-factor gate ``_is_force_memo_request(query)`` fires when
+  the query contains a memo VERB **and** a memo NOUN **and** a topic
+  keyword from ``DOMAIN_KEYWORDS``. No parallel topic list — keywords
+  are sourced from ``core.metadata_filter.DOMAIN_KEYWORDS`` so adding
+  a new topic there flows to memo detection automatically.
+
+**Test coverage closed (must remain green):**
+- ``tests_memo_continuity_c9_long.py`` — the exact 10-turn scenario
+  the user hit. 10/10 assertions.
+- ``tests_memo_force_intent.py`` — verb-variant + regression guard.
+  2/2 assertions.
+- ``tests/test_memo_signal_computation.py`` — unit contract on the new
+  full-history sweep. 2/2 assertions.
+
+**Lesson captured — protocol update:**
+Memo-path test fixtures must include at least one scenario with
+≥ 10 turns where the rich-signal turn is in the first half of the
+history, followed by short follow-up nags. Any future memo refactor
+that reintroduces a sliding window will break these tests.
+
