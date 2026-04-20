@@ -1401,6 +1401,45 @@ async def _find_relevant_precedents_augmented_impl(
 # Public API
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+# Test-harness helper (NOT for production use)
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _reset_pool_state() -> None:
+    """
+    Test-only: close and null out ``core.app_state.pool`` so the next call
+    to ``_ensure_pool()`` (inside a test) creates a fresh pool bound to
+    the CURRENT event loop.
+
+    Why this exists:
+    ----------------
+    ``pytest-asyncio`` in auto-mode creates a new event loop per test
+    function by default. ``app_state.pool`` is a module-level global
+    populated once by the first test and reused by the rest — but the
+    asyncpg pool internally binds its connections to the event loop that
+    created it. When a later test runs in a fresh loop and tries to use
+    the already-populated pool, asyncpg raises
+    ``Event loop is closed`` / ``another operation is in progress``.
+
+    This helper is invoked by the ``tests/phase2/conftest.py`` autouse
+    fixture before and after every test, guaranteeing that each test
+    starts with ``app_state.pool is None`` and constructs its own pool.
+
+    Production runtime NEVER calls this — FastAPI's lifespan owns the
+    pool for the whole app lifecycle. Test harnesses only.
+    """
+    from core import app_state
+    if app_state.pool is not None:
+        try:
+            await app_state.pool.close()
+        except Exception:
+            # The pool may be bound to an already-closed loop (prior test).
+            # We cannot await its close() in that case — just drop the
+            # reference and let the GC reclaim it.
+            pass
+        app_state.pool = None
+
+
 __all__ = [
     "Precedent",
     "PRECEDENT_LINKER_ENABLED",
@@ -1416,4 +1455,5 @@ __all__ = [
     "extract_case_numbers_from_answer",
     "verify_precedent_references_in_answer",
     "map_corpus_domain_to_tamyeez",
+    "_reset_pool_state",
 ]

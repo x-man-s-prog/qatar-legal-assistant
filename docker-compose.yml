@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
     command: >
       redis-server
-      --maxmemory 256mb
+      --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --appendonly yes
       --appendfilename "redis.aof"
