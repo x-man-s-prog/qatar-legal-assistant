@@ -1903,6 +1903,52 @@ async def handle_memo_smart(
                 )
                 break
 
+    # ═══ Fix B — fail-loud topic ask (no silent generic fallback) ═══
+    # If topic is STILL "عام" after recovery AND there is no history
+    # context AND the query itself contains no DOMAIN_KEYWORDS hint,
+    # we have no grounds to draft anything meaningful. Without this
+    # branch, the request would fall through to runtime_v2's
+    # ``_build_generic_skeleton`` which emits a hardcoded procedural
+    # list ("الأطراف، الوقائع، المستندات...") that confuses users who
+    # expected a topic-level acknowledgement. See FINDING §12.
+    #
+    # We reuse ``_has_memo_topic`` (introduced in commit 71d915a) as
+    # the defensive DOMAIN_KEYWORDS probe — same predicate, avoiding
+    # a duplicate helper.
+    #
+    # Strict three-factor guard — all must hold:
+    #   1. topic == "عام"           — memo-topic map found nothing
+    #   2. len(history or []) < 2   — no session context to stand on
+    #   3. not _has_memo_topic(q)   — query has no DOMAIN keyword
+    if (
+        topic == "عام"
+        and len(history or []) < 2
+        and not _has_memo_topic((query or "").lower())
+    ):
+        async def ask_topic_gen():
+            text = (
+                "لأصيغ لك مذكرة صحيحة أحتاج موضوعها أولاً.\n\n"
+                "هل هي في دعوى:\n"
+                "• حضانة أو نفقة أو خلع؟\n"
+                "• فصل تعسفي أو مستحقات عمالية؟\n"
+                "• إيجار أو عقار؟\n"
+                "• شيك بدون رصيد أو دين؟\n"
+                "• سرقة أو جريمة؟\n"
+                "• غير ذلك — اذكر الموضوع.\n\n"
+                "اذكر الموضوع والتفاصيل الأساسية وأصيغ لك المذكرة مباشرة."
+            )
+            async for frame in _stream_text_direct(
+                text, "memo_ask_topic", 90, chunk_size=50,
+            ):
+                yield frame
+        log.info(
+            "memo_smart: topic unknown + no history + no DOMAIN keyword "
+            "→ route=memo_ask_topic"
+        )
+        return StreamingResponse(
+            ask_topic_gen(), media_type="text/event-stream"
+        )
+
     gaps = _MEMO_GAPS.get(topic)
 
     # ═══ Signal sufficiency — full-history sweep ═══

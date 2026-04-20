@@ -355,9 +355,59 @@ _MEMO_TRIGGERS = (
 )
 
 
+# ─────────────────────────────────────────────────────────────────
+# Arabic ال-prefix-tolerant substring match (CP2 Part B pattern)
+# ─────────────────────────────────────────────────────────────────
+# Naive ``t in q`` misses users' colloquial definite-article phrasing:
+# ``"اكتب المذكرة"`` (ال on the noun) is the same intent as
+# ``"اكتب مذكرة"`` but fails ``"اكتب مذكرة" in "اكتب المذكرة"``
+# because the literal substring is interrupted by the ``ال``.
+#
+# Same root-cause pattern as ``core/case_memory/entity_extractor``
+# ``_match_word`` shipped in CP2 Part B. We apply an optional
+# ``(?:ال)?`` prefix on every word of the trigger, joined by
+# ``\s+``. Patterns are compiled once and cached.
+#
+# Boundary safety (verified by the negative matrix in
+# ``tests/test_phase0_memo_al_prefix.py``):
+#   • ``"اكتبت مذكرة"`` — "اكتب" appears at pos 0 but next char is "ت"
+#     not whitespace → `\s+` fails → NO MATCH.
+#   • ``"يكتب مذكرة"`` — "اكتب" (ا-ك-ت-ب) not a substring of "يكتب"
+#     (ي-ك-ت-ب) → NO MATCH.
+#   • ``"اكتب مذكرتي"`` — pattern ends in literal ``ة`` (ta-marbuta)
+#     while query has ``ت`` (regular ta) at that position → NO MATCH.
+#
+# No explicit ``\b`` is used; word-boundary correctness comes from the
+# structural shape of the regex (mandatory ``\s+`` between parts, and
+# the ta-marbuta ending on noun triggers).
+
+_MEMO_TRIGGER_AL_CACHE: Dict[str, re.Pattern] = {}
+
+
+def _matches_memo_trigger(trigger: str, text: str) -> bool:
+    """Match ``trigger`` in ``text`` with optional ``ال`` prefix per word.
+
+    ``trigger`` comes from ``_MEMO_TRIGGERS``. Splitting on whitespace
+    gives the individual words; each gets an ``(?:ال)?`` prefix in the
+    compiled pattern. Empty / whitespace-only triggers degrade to a
+    plain substring check (the current contract: substring-in behaviour).
+    """
+    pat = _MEMO_TRIGGER_AL_CACHE.get(trigger)
+    if pat is None:
+        parts = trigger.split()
+        if not parts:
+            return trigger in text
+        tokens = [r"(?:ال)?" + re.escape(p) for p in parts]
+        pat = re.compile(r"\s+".join(tokens))
+        _MEMO_TRIGGER_AL_CACHE[trigger] = pat
+    return bool(pat.search(text))
+
+
 def is_memo_request(query: str) -> bool:
     q = (query or "").strip().lower()
-    return any(t in q for t in _MEMO_TRIGGERS)
+    if not q:
+        return False
+    return any(_matches_memo_trigger(t, q) for t in _MEMO_TRIGGERS)
 
 
 # ═════════════════════════════════════════════════════════════════════

@@ -235,3 +235,90 @@ Memo-path test fixtures must include at least one scenario with
 history, followed by short follow-up nags. Any future memo refactor
 that reintroduces a sliding window will break these tests.
 
+## 12. Server-Side Memo Resilience to UI History Bug
+
+Discovered during live production testing (user session, Turn 3-10).
+Three compounding root causes surfaced despite FINDING #11's fix
+already being deployed.
+
+### Symptoms
+- User typed "اكتب مذكرة إسقاط حضانة" five-plus times explicitly.
+- System variously: asked for details (correct once), explained
+  custody law without writing (wrong), produced a generic procedural
+  checklist ("الأطراف، الوقائع، المستندات…") without a topic ask (wrong).
+- Context appeared lost between turns even though the client-side
+  conversation UI displayed the full history.
+
+### Three compounding root causes
+
+**Cause A — ال-prefix gap in ``is_memo_request``:**
+``_MEMO_TRIGGERS`` used naive ``t in q`` substring checks. The literal
+substring "اكتب مذكرة" does not appear inside "اكتب المذكرة" because
+the definite article ``ال`` interrupts the match. Phase0 therefore
+routed the request to ``general`` instead of ``memo``.
+
+**Fix A (this commit):** ``_matches_memo_trigger`` with a cached
+``(?:ال)?word`` regex per trigger word. Same root-cause pattern as
+``core/case_memory/entity_extractor._match_word`` shipped in CP2
+Part B. ``_MEMO_TRIGGERS`` tuple itself is unchanged.
+
+**Cause B — UI-side history truncation:**
+Production logs confirmed UI sends an empty or truncated ``history``
+array on ``POST /api/v1/stream/``. ``memo_continuation`` gates A/B/C
+all require ``len(history) >= 2`` and silently skip otherwise. The
+server routed memo-worthy queries to ``general`` with zero context.
+
+Server-side mitigation (this commit): Fix A makes phase0 robust
+to the ``ال``-prefix issue, so even without history the request
+reaches ``handle_memo_smart``. UI-side fix is scheduled for a
+dedicated FE/UI session.
+
+**Cause C — Silent generic fallback in ``_build_generic_skeleton``:**
+When ``handle_memo_smart`` received a memo request with ``topic=="عام"``
+and no history context, it fell through to ``runtime_v2``'s
+``_build_generic_skeleton``, which produced a hardcoded procedural
+ask ("الأطراف، الوقائع، المستندات، الطلب…") without ever asking
+which kind of memo. Users parsed this as "the system didn't
+understand I wanted a memo about my case."
+
+**Fix B (this commit):** ``handle_memo_smart`` now intercepts BEFORE
+``runtime_v2`` is reached when all three conditions hold:
+  1. ``topic == "عام"`` — memo-topic map found nothing
+  2. ``len(history or []) < 2`` — no session context to stand on
+  3. ``not _has_memo_topic(query)`` — query has no ``DOMAIN_KEYWORDS`` hint
+
+When all three hold, we emit a new ``memo_ask_topic`` route with a
+compact Arabic prompt that lists the top family options (حضانة /
+نفقة / خلع / فصل تعسفي / إيجار / شيك / سرقة / أخرى). ``runtime_v2``'s
+generic skeleton path is otherwise untouched — it still serves the
+cases where drafting is genuinely appropriate without clear topic.
+
+### Dual topic-detection systems — scheduled
+
+Reconnaissance during Fix B design revealed two independent topic-
+detection paths:
+  - ``_MEMO_TOPIC_MAP`` in ``routers/query_router.py`` — 12 topics,
+    default ``"عام"``.
+  - ``_GENERIC_CUES`` in ``core/runtime_v2/pipeline.py`` — 6
+    families, default ``None``.
+
+These should eventually unify into a single authoritative topic
+registry. Out of scope for this fix — the two systems correctly
+serve different call paths today.
+
+### Test coverage closed
+
+Added ``tests/test_phase0_memo_al_prefix.py`` (23 pytest assertions)
+and ``tests_memo_no_history_al.py`` (2 HTTP scenarios). Both were
+test-first: written to FAIL against the current code, then the fix
+landed, then they PASS. They are the permanent guard against both
+the ``ال``-prefix regression and the silent-generic-memo regression.
+
+### Protocol update
+
+Memo-path test fixtures MUST include:
+  - ``ال``-prefix variants alongside bare-prefix tests.
+  - Empty-history scenarios alongside full-history tests.
+  - Post-fix live HTTP verification (logs + response inspection),
+    not just pytest green.
+
