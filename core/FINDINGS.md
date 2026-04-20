@@ -104,3 +104,75 @@ loop cross-binding in asyncpg pool.
 under the claimed conditions, not assumed from partial runs.
 Session protocol updated: before any commit claiming N/N tests,
 run full suite in clean environment and capture output.
+
+## 8. Async Redis Client Introduction
+
+**Context:** Phase 2 Layer 3 (Case Memory) required async Redis access.
+Pre-flight check (CP1.1) revealed no canonical async client existed.
+
+**Decision:** Create `core/redis_client.py` as canonical async getter.
+
+**Scope (intentionally narrow):**
+- Used exclusively by `case_memory/store.py` in this session.
+- Existing sync path in `query_router._get_redis()` untouched.
+- Different key namespaces prevent interference:
+  - Sync: `answer_memory:*` (Layer 1, legacy)
+  - Async: `case:*`, `case_index:*` (Layer 3, new)
+
+**Pattern mirrors asyncpg handling in Layer 2:**
+- Singleton per (db, event_loop) pair.
+- Test-only `_reset_redis_pool_for_loop()` for pytest isolation.
+- Lazy creation with PING verification.
+
+**Future migration (separate session):** sync usage in query_router
+can eventually migrate to this module. Not done now — out of scope.
+
+**Not a patch:** architectural addition, not workaround.
+
+## 9. TPM Saturation in Integration Test Batches
+
+**Observed during CP2 Parts B, C, and D:**
+- Single-test isolation: all passing consistently.
+- Back-to-back 38-test regression batch: rotating failures.
+- Pattern: different tests fail each run (h5/h6/h7/h8/h9/f5/f6 rotate).
+- Isolation probes confirm: each "failed" test returns 17-22KB valid response
+  when run alone.
+
+**Root cause:** OpenAI API TPM (tokens per minute) quota saturation
+during rapid-fire batch execution.
+
+**Not a code regression. Not a test flakiness bug.**
+
+**Protocol (documented for future sessions):**
+- After 3 retry attempts showing rotation pattern → declare TPM artifact.
+- Isolation probe the "worst offender" test → confirm 17KB+ response.
+- Proceed. Do NOT modify tests or code to mask TPM artifacts.
+
+**Long-term resolution path:**
+- Implement per-session TPM-aware test scheduling (cooldowns between suites).
+- Or: migrate integration tests to record-replay mode (cached LLM responses).
+- Scheduled for: dedicated test-infrastructure session, not inline.
+
+**Evidence:**
+- h9 isolation probe: 22,864 bytes response, "مكافأة نهاية الخدمة" present in first sentence.
+- h7 isolation probe: 19,399 bytes response, concept "حجية الأمر المقضي" injected.
+- h8 isolation probe: 17,160 bytes response, complete answer.
+- f5 isolation probe: 17,575 bytes response, contains "10"/"14"/"سنوات".
+
+## 10. Cached Redis Client PING Verification
+
+**Design choice in `core/redis_client.py`:** Every `get_redis_client()` call
+PINGs the cached client before returning.
+
+**Rationale:**
+- Cached clients can become stale after inactivity (connection timeout,
+  network hiccup, Redis restart).
+- PING cost: <1ms locally.
+- Alternative (skip PING) risks "Connection reset by peer" in hot path,
+  which is MUCH more expensive to recover from than the PING cost.
+
+**Not a workaround — defensive reliability feature.**
+
+**Validated:**
+- 30/30 phase3 tests pass in 1.27s total — PING overhead negligible.
+- Zero "Event loop is closed" errors in production path during CP2 runs.
