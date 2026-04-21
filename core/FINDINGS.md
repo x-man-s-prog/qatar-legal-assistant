@@ -804,3 +804,236 @@ confirms state-machine-only routing is stable across edge cases.
 - CP6: surface ``state.phase`` in the ``done`` frame so clients
   can display "awaiting memo details" chips.
 
+## 16. Legal Reasoning Engine — Memo Quality Paradigm Shift (CP6)
+
+### The Meta-Root-Cause (Round 2)
+CP1-5 closed HALLUCINATION on 5 template layers and restored CONTEXT
+via a server-side state machine. Every test was green. Yet the user
+re-reported poor memo quality on T3 of a fresh live session:
+
+  • Child's name ``"احمد"`` never appeared in the memo
+    (fact_extractor captured it as ``names=["احمد"]`` but the
+    composer only rendered ``claims`` as bullets).
+  • SEVEN articles dumped (168, 183, 166, 167, 171, 186, 182).
+    A lawyer would cite 2-3. Article 168 (non-foreigner spouse
+    condition) was injected into a سوء سلوك case — user never
+    mentioned marriage.
+  • Precedents were three civil cassation rulings about property
+    ownership and traffic accident liability — in a family-law
+    custody memo. Jaccard similarity was 0.89-0.91 (high on TEXT,
+    zero on LEGAL PRINCIPLE).
+  • Facts rendered as flat labelled bullets
+    (``"الأعمار المذكورة: 3 سنين"``) rather than woven into
+    coherent legal prose.
+  • Prayer #2 was a ``[placeholder]`` scaffold, not a
+    domain-specific substantive prayer.
+
+### Root-Cause Diagnosis
+The symptoms are cosmetic, but the architecture behind them is
+deep. Every pre-CP6 component was deterministic and safe:
+
+  fact_extractor     — LLM, bounded, structured.
+  precedent_linker   — Jaccard + embeddings, bounded.
+  article_summary    — DB verbatim, bounded.
+  compose_memo       — template concatenation, bounded.
+
+Each piece does its one job without hallucinating. BUT:
+
+  **NO component holds the WHOLE context + makes whole-memo
+  decisions**. The composer sees all pieces yet merely concatenates
+  them. It is a DUMB ASSEMBLER, not a LAWYER.
+
+A real lawyer writing a memo REASONS:
+  1. Characterize the legal ground from facts.
+  2. Select 2-3 articles that actually support THAT ground.
+  3. Retrieve precedents by legal principle, not text similarity.
+  4. Weave facts + law + precedent into coherent prose.
+  5. Craft prayers aligned with the argument.
+
+Pre-CP6 there was no layer performing any of those. The "safety
+via determinism" design choice had ELIMINATED INTELLIGENCE from
+the composition step. CP1's hallucination guard prevented
+invention; CP4's state machine restored context; but neither
+added legal reasoning.
+
+### The Paradigm Shift
+``core/legal_reasoning_engine.py`` (~500 LOC, new module) —
+replaces the concatenator with a 5-stage reasoning pipeline:
+
+  Stage 1 — **CHARACTERIZE**
+    Given (facts, domain) → ``LegalGround`` {label, primary_article,
+    primary_clause, required_elements, confidence}.
+    Example: "سوء سلوك الحاضنة" + family_custody →
+      label = "إسقاط الحضانة لسوء سلوك الحاضنة"
+      primary_article = "183", primary_clause = "3"
+
+  Stage 2 — **SELECT**
+    Given (ground, candidate_articles) → 2-4 ``SelectedArticle`` only.
+    Explicit ``rejected`` reasons for transparency.
+    Example for above: {183, 182, 167}. Reject 168 ("لا تنطبق —
+    لم يُذكر زواج"), 171 ("لا علاقة بالسبب"), 186 ("زيارة لا
+    تخص الإسقاط").
+
+  Stage 3 — **RERANK PRECEDENTS**
+    Given (ground, candidate_precedents) → ``SelectedPrecedent``
+    list filtered by LLM score (>= 0.5). Cross-domain rulings
+    are auto-rejected. Custody memo never pulls civil-property
+    precedents.
+
+  Stage 4 — **COMPOSE PROSE**
+    Given (ground, facts, selected articles, selected precedents)
+    → lawyer-quality prose memo text. Strict system prompt:
+      - Never invent facts.
+      - Never cite articles outside the selected list.
+      - Never cite precedents outside the selected list.
+      - Use bracketed placeholders for missing info
+        (``[يُدرج اسم المدعى عليها]``).
+      - Prose, not bullets.
+      - Qatari court memo style.
+
+  Stage 5 — **VERIFY** (programmatic, cheap)
+    Regex-extract article numbers + precedent refs from the
+    composed text. Flag any that are outside the selected sets.
+    Cheap, deterministic, auditable. No LLM.
+
+### Integration
+``core/runtime_v2/composer.py::compose_memo`` is now an
+**orchestrator**:
+
+  1. Gather candidate_articles (from domain.article_refs, expanded
+     via article_summary + metadata stripping from Fix 1.D).
+  2. Gather candidate_precedents (from precedent_linker — CP3).
+  3. Get extracted facts (from fact_extractor — CP1 Fix 1.A).
+  4. Call ``compose_reasoned_memo_sync`` (the engine).
+  5. **If engine succeeds** → return its memo.
+  6. **If engine fails** → fall through to existing deterministic
+     template assembly. This is the reliable safety net.
+
+### Execution Model
+The engine makes 3-4 LLM calls per memo:
+  - Stage 1 (characterize) ~1 call
+  - Stages 2 + 3 in PARALLEL (asyncio.gather) ~1 call each
+  - Stage 4 (compose) ~1 call
+  - Stage 5 (verify) no LLM
+
+Total latency: ~10-15s. Pre-CP6 was ~3s. The user accepted this
+trade-off: "quality over speed".
+
+**Critical fix**: ``_corpus_bg.run`` has a short hardcoded timeout
+(`_TIMEOUT + 1.0` ≈ 6s) designed for sub-second asyncpg work. The
+engine exceeds this, causing silent timeout → fallback → symptom
+that "engine never ran" despite logs showing success. CP6 runs
+the engine in a DEDICATED ``ThreadPoolExecutor`` with its own
+event loop + 90s timeout. Pattern is safe because
+``compose_memo`` is called from a sync context (runtime_v2.answer),
+NOT from within an async context.
+
+### Caching
+Characterize + select_articles results are cached in Redis db=2
+keyed by ``sha1(json(inputs))``. TTL 1h. Same facts → same ground
+→ same articles, which is the correct cache semantics.
+
+Compose output is NEVER cached — style may vary per turn and the
+memo is the user-visible artifact.
+
+### Prompts
+Each stage has a dedicated Arabic system prompt that enforces:
+  - Strict JSON output schema (stages 1, 2, 3).
+  - Absolute-no-invention constraints.
+  - Mandatory bracketed placeholders for missing fields
+    (stage 4 — so downstream test contracts still find markers).
+  - Mandatory section headers (``الوقائع`` / ``الدفوع والأسانيد
+    الموضوعية`` / ``الأسانيد القانونية`` / ``السوابق القضائية`` /
+    ``الطلبات``).
+
+### The Critical Proof
+Live user T3 scenario (``1- احمد 3 سنين 2- سوء سلوكها 3- تاريخ
+الطلاق 01/01/2023``):
+
+**Pre-CP6 memo** (template dump, 4747 chars):
+  - 7 articles dumped (168, 183, 166, 167, 171, 186, 182)
+  - 3 civil-property precedents (wrong domain)
+  - Flat bullets ("الأعمار المذكورة: 3 سنين")
+  - Generic ``[placeholder]`` prayer #2
+
+**Post-CP6 memo** (lawyer prose, 1087 chars):
+  - 2 articles on-point (183 primary, 182 procedural)
+  - Honest "لا توجد أحكام تمييز ذات صلة مباشرة"
+    (engine rejected civil precedents)
+  - Prose: "يتقدم المدعي، وهو الأب، بطلب إسقاط حضانة ابنه أحمد،
+    البالغ من العمر ثلاث سنوات، من طليقته..."
+  - Specific prayer: "الحكم بإسقاط حضانة المدعى عليها لابنه
+    أحمد وضم المحضون..."
+
+Denser (1087 vs 4747 chars) but QUALITATIVELY HIGHER — a real
+lawyer's memo, not a template dump.
+
+### Test Coverage
+Existing suites (11/11 anti-hallucination, 14/14 context-prop,
+17/17 production scenario, 132/132 pytest) all stayed green after
+adjusting the memo-length threshold from 2500 (old template dump
+floor) to 800 (real-prose floor). Prose memos are denser by design.
+
+### Fallback Protocol
+The engine has THREE failure modes, all handled:
+
+  1. LLM call timeout → stage returns empty → engine result has
+     ``used_engine=False`` → compose_memo falls to template path.
+  2. JSON parse failure on any stage → same path.
+  3. Compose returned empty/short output → same path.
+
+The template assembler (pre-CP6 path) is preserved and remains the
+safe fallback. Zero regression risk on engine failure.
+
+### The Architectural Lesson
+"Safety via determinism" is NOT free. It eliminates hallucination
+AND eliminates intelligence. Legal drafting needs intelligence.
+The solution is not to restore determinism — it is to wrap an
+LLM in STRONG INPUT/OUTPUT CONSTRAINTS so its intelligence is
+directed and verifiable. The constraints are:
+
+  - Input: grounded facts + candidate articles + candidate precedents
+  - Output: prose guided by a strict system prompt
+  - Verify: programmatic regex on the output
+
+This is the pattern that scales. Every future "quality" layer
+(handle_general answer composition, precedent summarization,
+argument strengthening) should follow this pattern — not another
+deterministic filter.
+
+### Protocol Update — The Reasoning Layer Principle
+
+When a symptom's root cause is "output quality is poor but no
+component is hallucinating", the fix is NOT another filter. It
+is an LLM-driven reasoning layer with:
+
+  1. Explicitly grounded input (facts / candidate articles / etc.)
+  2. A strict system prompt with output constraints
+  3. Programmatic output verification
+  4. A deterministic fallback path
+
+This pattern is what makes CP6 different from CP1-5 (which were
+constraints ABOUT determinism) and from CP2 (which was filters ON
+retrieval). CP6 is the first addition of GENERATIVE REASONING
+with guardrails.
+
+### Scheduled Follow-up
+
+- CP7: extend the reasoning pattern to ``handle_general`` — answer
+  composition LLM layer with citation-grounded constraints. The
+  T1 "ما هي عقوبات المرور" vague answer is the remaining symptom
+  this would address.
+- CP7: add ``legal_answer_engine.py`` — same 5-stage pattern but
+  for Q&A not drafting (characterize question → select relevant
+  articles → compose prose answer → verify citations).
+- CP8: extend reasoning to precedent summarization — current
+  ``rerank_by_ground`` filters, but a summarization layer could
+  explain WHY each kept precedent applies.
+- CP8: add ``legal_style_guide`` module codifying Qatari memo
+  conventions (currently baked into ``_COMPOSE_MEMO_SYSTEM``
+  prompt — should be externalized for maintainability).
+- Future: domain-specific reasoning overrides (e.g., custody
+  cases always check Article 167 elements explicitly) — today
+  the engine is domain-agnostic, which may produce generic
+  reasoning for specialized domains.
+

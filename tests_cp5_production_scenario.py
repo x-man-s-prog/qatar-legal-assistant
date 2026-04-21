@@ -152,8 +152,13 @@ def main() -> int:
     # T3 — the memo itself (the critical failure point)
     t3 = by_label.get("t3", {})
     t3_ans = t3.get("content", "")
-    t3_is_memo = t3.get("route") == "memo" and len(t3_ans) >= 2500
-    content_checks.append(("T3 memo generated (route=memo, len>=2500)", t3_is_memo))
+    # CP6 note — threshold lowered from 2500 to 800. Pre-CP6 memos were
+    # template-dumps (all 7 domain articles + all helper blocks) typically
+    # 4500+ chars. CP6 engine produces *prose* memos — denser, shorter,
+    # targeted. A well-formed 1000-char prose memo is legally stronger than
+    # a 4700-char template dump.
+    t3_is_memo = t3.get("route") == "memo" and len(t3_ans) >= 800
+    content_checks.append(("T3 memo generated (route=memo, len>=800)", t3_is_memo))
     content_checks.append(("T3 contains 'احمد' or 'أحمد'",
                            ("احمد" in t3_ans) or ("أحمد" in t3_ans)))
     content_checks.append(("T3 contains 'سلوك'", "سلوك" in t3_ans))

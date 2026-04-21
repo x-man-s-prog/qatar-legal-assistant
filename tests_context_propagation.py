@@ -145,8 +145,10 @@ def main() -> int:
     # T3 — the memo itself
     t3 = results[2]
     t3_ans = t3["content"]
-    t3_is_memo = t3["route"] == "memo" and len(t3_ans) >= 3000
-    content_checks.append(("T3 memo generated (route=memo, len>=3000)", t3_is_memo))
+    # CP6 note — prose memos are denser than template-dumps. 800 is a
+    # real-lawyer's memo floor; pre-CP6 dumps averaged 4500+.
+    t3_is_memo = t3["route"] == "memo" and len(t3_ans) >= 800
+    content_checks.append(("T3 memo generated (route=memo, len>=800)", t3_is_memo))
     content_checks.append(("T3 contains 'احمد' or 'أحمد'",
                            ("احمد" in t3_ans) or ("أحمد" in t3_ans)))
     content_checks.append(("T3 contains 'سلوك'", "سلوك" in t3_ans))

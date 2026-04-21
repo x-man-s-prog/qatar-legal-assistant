@@ -1065,6 +1065,135 @@ def compose_memo(
             query=query, corpus_domain=corpus_domain, concepts=concepts,
         )
 
+    # ═══════════════════════════════════════════════════════════════
+    # CP6 — Legal Reasoning Engine (primary path)
+    # ─────────────────────────────────────────────────────────────────
+    # Before falling through to the deterministic template assembler,
+    # try to produce a lawyer-composed memo via the reasoning engine.
+    # The engine:
+    #   1. Characterizes the specific legal ground from user facts.
+    #   2. Selects 2-4 articles (out of all domain.article_refs) that
+    #      actually support THAT ground.
+    #   3. Reranks precedents by LLM-scored ground match.
+    #   4. Composes a prose memo via a lawyer-prompt LLM.
+    #   5. Verifies grounding programmatically.
+    # On success → return the engine's memo.
+    # On any failure → fall through to the deterministic path below,
+    # which remains a reliable safety net.
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from core.legal_reasoning_engine import compose_reasoned_memo_sync
+        from core.fact_extractor import extract_user_facts_sync
+        _ENGINE_AVAILABLE = True
+    except Exception:
+        _ENGINE_AVAILABLE = False
+        compose_reasoned_memo_sync = None  # type: ignore
+        extract_user_facts_sync = None  # type: ignore
+
+    if _ENGINE_AVAILABLE and query:
+        try:
+            # 1) Get grounded facts via fact_extractor (same source as
+            #    _facts_block uses internally — but we need the full
+            #    ExtractedFacts dict, not just claims-as-bullets).
+            actual_q, pseudo_hist = _split_combined_query(query)
+            extracted = extract_user_facts_sync(
+                query=actual_q,
+                history=pseudo_hist if pseudo_hist else None,
+                use_cache=True,
+            )
+            facts_list = list((user_facts or []))
+            if extracted is not None:
+                # Merge extracted claims into user_facts (dedupe).
+                for c in extracted.claims:
+                    if c and c.strip() and c not in facts_list:
+                        facts_list.append(c.strip())
+
+            # 2) Build candidate articles with text (fetched from DB).
+            candidate_articles = []
+            refs = (domain.article_refs or ()) if domain else ()
+            for art_num, law_pat in refs:
+                text = article_summary(law_pat, art_num, max_chars=250) or ""
+                text = _strip_article_metadata(text)
+                candidate_articles.append({
+                    "number":   str(art_num),
+                    "law_name": str(law_pat).replace("%", "").strip() or "قانون قطري",
+                    "text":     text,
+                })
+
+            # 3) Candidate precedents — from `precs`.
+            candidate_precedents = []
+            for p in precs or []:
+                candidate_precedents.append({
+                    "display_ref": getattr(p, "display_ref", "") or "",
+                    "content":     getattr(p, "content", "") or "",
+                    "domain":      getattr(p, "domain", "") or "",
+                    "score":       float(getattr(p, "similarity_boosted", 0.0) or 0.0),
+                })
+
+            # 4) Determine domain_key programmatic value
+            domain_key_val = ""
+            if domain is not None:
+                _k = getattr(domain, "key", None)
+                if _k is not None:
+                    domain_key_val = getattr(_k, "value", "") or str(_k)
+
+            # 5) Drafting mode display label
+            drafting_mode_label = _MEMO_TITLE.get(drafting_mode, "مذكرة قانونية")
+
+            # 6) Invoke the engine (sync wrapper runs through _corpus_bg)
+            ext_dict = extracted.to_dict() if extracted is not None else {
+                "names": [], "dates": [], "amounts": [], "ages": [],
+                "claims": [], "requests": [],
+            }
+            engine_result = compose_reasoned_memo_sync(
+                query                 = actual_q,
+                user_facts            = facts_list,
+                extracted_facts_dict  = ext_dict,
+                domain_display        = domain_display,
+                domain_key            = domain_key_val,
+                candidate_articles    = candidate_articles,
+                candidate_precedents  = candidate_precedents,
+                drafting_mode_label   = drafting_mode_label,
+                client_role           = client_role,
+            )
+
+            if (
+                engine_result is not None
+                and engine_result.used_engine
+                and engine_result.memo_text
+                and len(engine_result.memo_text) >= 500
+            ):
+                memo_text = engine_result.memo_text
+                log.info(
+                    "compose_memo: engine succeeded (len=%d, articles=%d, "
+                    "precs=%d, %.1fs, grounded=%s)",
+                    len(memo_text),
+                    len(engine_result.selected_articles),
+                    len(engine_result.selected_precedents),
+                    engine_result.elapsed_seconds,
+                    engine_result.verification.passed,
+                )
+                # Apply existing hallucination guard on case-number refs
+                if _PRECEDENT_AVAILABLE and _pl_verify is not None:
+                    try:
+                        memo_text, _halluc = _pl_verify(memo_text, precs)
+                    except Exception:
+                        pass
+                return memo_text
+            else:
+                reason = (
+                    engine_result.failure_reason
+                    if engine_result is not None
+                    else "engine returned None"
+                )
+                log.info("compose_memo: engine fallback — %s", reason)
+        except Exception as _engine_err:
+            log.warning("compose_memo: engine error → fallback: %s", _engine_err)
+        # Fall through to deterministic path below.
+
+    # ═══════════════════════════════════════════════════════════════
+    # DETERMINISTIC FALLBACK (pre-CP6 behaviour)
+    # ═══════════════════════════════════════════════════════════════
     out: list[str] = []
     out.extend(_memo_header(domain_display, drafting_mode, client_role))
     # CP1 · Fix 1.A — pass ``query`` so _facts_block / _defenses_block
