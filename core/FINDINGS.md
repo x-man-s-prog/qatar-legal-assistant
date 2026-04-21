@@ -632,3 +632,175 @@ a new store goes there with a clear key prefix
   a visible indicator — currently clients treat it identically
   to a normal general answer.
 
+## 15. Server-Side Session State Machine (CP5)
+
+### The Meta-Discovery
+CP1 closed hallucination on five template layers. CP4 closed context
+propagation with four pattern-match gates + session-topic persistence.
+A fresh production reproduction showed ALL CP4 fixes evaporated the
+moment the client UI sent ``history=[]`` on a memo-bearing turn:
+
+  T2: "اكتب لي مذكرة اسقاط حضانه" (UI sends history=[])  → ask_details ✓
+  T3: "1- احمد 3 سنوات 2- سوء سلوكها..."  (UI history=[]) → GENERAL ✗
+  T4: "لماذا لم تكتب المذكرة ؟"            (UI history=[])
+      → "لم أكتب المذكرة لأن سؤالك لم يتضمن طلباً صريحاً" ✗
+  T5: "اكتب مذكرة اسقاط حضانه"             (UI history=[]) → ask_details (loop) ✗
+  T6: "اكتب بالمعلومات المتوفرة"           (UI history=[])
+      → "يرجى توضيح السؤال أو الموضوع"     ✗ (catastrophic context loss)
+
+Every CP4 gate — Gate A (assistant-blob match), Gate B (prior user
++ short command), Gate C (current-query keyword), Gate D
+(structured-details detector) — requires ``req.history`` to be
+non-empty. Gate D's unit tests passed because they sent history
+in the test harness. Production doesn't.
+
+### Meta-Root-Cause
+**The server keeps NO authoritative state between turns.** Every
+handler treats every request as isolated. All memory is either:
+
+  - in-memory per-turn (lost between requests), OR
+  - in the client's ``req.history`` field (which the UI truncates).
+
+session_topic_memory (CP4 Fix 2) persisted ONE field. Pattern
+matching with CP4 gates saw only what the client sent. Neither
+was enough because neither treated the server's memory as
+authoritative.
+
+### Root Fix — Server-Side State Machine
+``core/session_state.py`` — Redis-backed authoritative state keyed
+by ``session_id``. The server now knows:
+
+  • **phase** ∈ {IDLE, AWAITING_MEMO_DETAILS, AWAITING_MEMO_TOPIC,
+    MEMO_DRAFTING} — the conversational state.
+  • **history** — full turn log (user + assistant) capped at 50
+    entries. Server truth. Replaces client ``req.history`` when
+    the client sends less.
+  • **topic** — memo topic once detected, sticky across turns.
+  • **memo_facts** — accumulated user facts for draft-in-progress.
+  • **last_updated** — epoch seconds for TTL / debug.
+
+**TTL**: 2 hours (matches realistic memo session length).
+**Redis DB**: 2 (existing case_memory bucket).
+**Failure mode**: any Redis error → empty state returned, logs at
+debug. Pre-CP5 behaviour is the safe degraded path.
+
+### Routing Contract (CP5)
+
+In ``routers/query_router.py::query_stream``, BEFORE any gate or
+pattern-match logic:
+
+    session_state = await load_state(sid)
+
+    if len(session_state.history) > len(req.history):
+        # Server has more than client → use server as truth
+        req.history = session_state.history
+
+    session_state.append_turn("user", q)
+
+    if session_state.phase in {AWAITING_MEMO_DETAILS,
+                               AWAITING_MEMO_TOPIC}:
+        # Fresh-question pivot exception:
+        if q starts with "ما هي عقوبة" / "كيف" / "هل " / ... :
+            session_state.reset_memo_state()   # release phase
+            # fall through to normal routing
+        else:
+            # FORCE memo route, ignore gates, ignore query content
+            return _wrap_with_state_save(
+                handle_memo_smart(q, sid, req.history),
+                session_state,
+            )
+
+    # Otherwise: normal phase0 + Gates A-D logic continues.
+    ...
+    # EVERY return site wraps its StreamingResponse so that after the
+    # stream completes, the assistant turn is appended to state.history,
+    # phase transitions via transition_by_route(), and state is persisted.
+
+### Fresh-Question Pivot — preserved from CP4
+The "ما هي عقوبة / كيف / هل" prefix list is reused inside the
+CP5 state check. Without it, every post-memo pivot (T7 in the
+failing transcript) would be dragged back into the memo handler.
+
+### StreamingResponse Wrapper
+CP5's ``_wrap_with_state_save`` intercepts the SSE stream:
+
+  1. For each ``data: {"type": "chunk", ...}`` frame, accumulates
+     the content into the assistant-turn buffer.
+  2. For the terminal ``data: {"type": "done", "route": "..."}``
+     frame, captures the final route label.
+  3. After the stream drains, persists state:
+       state.append_turn("assistant", accumulated)
+       state.transition_by_route(final_route)
+       save_state(state)
+
+All existing handlers (handle_general / handle_memo_smart /
+handle_article_text / handle_table / handle_calculator /
+handle_continuation) are UNCHANGED. The wrapper sits entirely
+in query_stream.
+
+### The 4 Phases
+
+| Phase | Entry condition | Exit |
+|-------|------------------|------|
+| IDLE | Fresh session or memo complete | User asks for memo |
+| AWAITING_MEMO_DETAILS | handle_memo_smart emitted memo_ask_details | User responds → MEMO_DRAFTING |
+| AWAITING_MEMO_TOPIC | memo request without topic | User gives topic → MEMO_DRAFTING |
+| MEMO_DRAFTING | Memo route fired | User pivots to fresh question → IDLE |
+
+### Test Coverage
+
+  - ``tests/test_session_state.py`` — 17 unit tests (dataclass
+    invariants, phase transitions, JSON round-trip, Redis
+    load/save/delete, sync wrappers).
+  - ``tests_cp5_production_scenario.py`` — 17 assertions on the
+    exact 8-turn production transcript. **Every request sends
+    ``history=[]``** to prove the fix stands without ANY client
+    history cooperation.
+
+### The Critical Proof
+``tests_cp5_production_scenario.py`` POST-requests with
+``history=[]`` on every turn. Pre-CP5: T3 → general (wrong),
+T4 → "سؤالك لم يتضمن طلباً صريحاً" (catastrophic), T6 → "يرجى
+توضيح السؤال" (context destroyed). Post-CP5: T3 → memo
+(route=memo, len=4747, contains احمد + سلوك), T4 →
+acknowledgement (not context loss), T6 → memo reuse,
+T7 → fresh pivot accepted, state machine releases memo phase.
+**17/17 PASS** without any client-supplied history.
+
+### Protocol Update — Server-Truth Principle
+
+Every memo-routing gate, every continuation detector, every topic
+recoverer MUST operate on server-stored state, not on
+``req.history``. Client history is a hint, not truth. Any new
+multi-turn feature follows the same contract:
+
+  1. Load session_state at entry.
+  2. Read from state (history / topic / facts / phase).
+  3. Decide route based on state.
+  4. Append user turn to state.
+  5. Save state.
+  6. Handler runs.
+  7. Wrapper captures assistant turn + transitions phase.
+  8. State saved on stream completion.
+
+### Deprecated in CP5 Contract
+Gates A/B/C/D (CP4 Fix 1) are retained for backward compatibility
+in the fall-through path when state is IDLE. They are NO LONGER
+load-bearing for the AWAITING_MEMO_DETAILS path — the state
+machine owns it. Subsequent CPs may remove them once soak-testing
+confirms state-machine-only routing is stable across edge cases.
+
+### Scheduled Follow-up
+
+- CP6: move ``session_topic_memory`` fields into ``SessionState``
+  (currently two parallel Redis keys for the same session).
+- CP6: ``memo_facts`` integration — feed accumulated facts to
+  ``handle_memo_smart`` so T6 "اكتب بالمعلومات المتوفرة" actually
+  uses T3's details (today T6 relies on handle_memo_smart's
+  own combined-query logic from ``req.history``).
+- CP6: migrate ``fact_extractor``'s Redis cache namespace to be
+  session-scoped (currently sig-based; would benefit from a
+  session bucket).
+- CP6: surface ``state.phase`` in the ``done`` frame so clients
+  can display "awaiting memo details" chips.
+

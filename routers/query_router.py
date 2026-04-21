@@ -54,6 +54,26 @@ from core.runtime_v2.adapter import (
 # ── Phase 0 router (pre-runtime_v2 shunt) ──
 from core.phase0_router import route_query
 from core import cancellation as _cancel
+
+# ── CP5: server-side session state machine (FINDING #15) ──
+# Redis-backed authoritative state. Replaces client-supplied history
+# as the source of truth for routing decisions and for handler
+# context. The module itself degrades to empty-state on any Redis
+# failure so pre-CP5 behaviour is the safe fallback path.
+try:
+    from core.session_state import (
+        Phase as _SessionPhase,
+        SessionState as _SessionState,
+        load_state as _load_state,
+        save_state as _save_state,
+    )
+    _SESSION_STATE_AVAILABLE = True
+except Exception as _ss_err:  # pragma: no cover — degrade open
+    _SESSION_STATE_AVAILABLE = False
+    _SessionPhase = None  # type: ignore
+    _SessionState = None  # type: ignore
+    _load_state = None    # type: ignore
+    _save_state = None    # type: ignore
 # NOTE: `get_history`/`add_to_history` were previously imported here but
 # are unused — history is passed explicitly through request payloads.
 
@@ -2341,6 +2361,76 @@ async def handle_memo_smart(
 # POST /api/v1/stream/ — SSE framing over runtime_v2 adapter
 # ═════════════════════════════════════════════════════════════════
 
+def _wrap_with_state_save(
+    original: StreamingResponse,
+    state,  # _SessionState or None
+) -> StreamingResponse:
+    """CP5 — wrap a handler's StreamingResponse so that (a) every
+    emitted SSE chunk feeds accumulated assistant text, (b) the 'done'
+    frame's route is captured, and (c) after the stream completes the
+    session state is updated (phase transition + assistant turn
+    appended) and persisted to Redis.
+
+    If state is None or session-state module is unavailable, returns
+    the original response unchanged — zero regression on the
+    pre-CP5 code path.
+    """
+    if state is None or not _SESSION_STATE_AVAILABLE or _save_state is None:
+        return original
+
+    original_iterator = original.body_iterator
+
+    async def _wrapped_body():
+        accumulated = ""
+        final_route = ""
+        try:
+            async for chunk in original_iterator:
+                # Parse SSE frames within this chunk to accumulate
+                # assistant text + capture final route.
+                try:
+                    text = (
+                        chunk.decode("utf-8", errors="replace")
+                        if isinstance(chunk, (bytes, bytearray))
+                        else str(chunk)
+                    )
+                    for line in text.split("\n"):
+                        if not line.startswith("data: "):
+                            continue
+                        try:
+                            obj = json.loads(line[6:])
+                        except Exception:
+                            continue
+                        t = obj.get("type")
+                        if t == "chunk":
+                            piece = obj.get("content") or obj.get("text") or ""
+                            if piece:
+                                accumulated += piece
+                        elif t == "done":
+                            r = obj.get("route")
+                            if r:
+                                final_route = r
+                except Exception:
+                    pass
+                yield chunk
+        finally:
+            # Always save — even on exception mid-stream — so we don't
+            # lose the user turn that was already appended upstream.
+            try:
+                if accumulated:
+                    state.append_turn("assistant", accumulated)
+                if final_route:
+                    state.transition_by_route(final_route)
+                await _save_state(state)
+            except Exception as _e:
+                log.debug("session_state: post-stream save failed: %s", _e)
+
+    return StreamingResponse(
+        _wrapped_body(),
+        media_type=original.media_type,
+        headers=dict(original.headers) if original.headers else None,
+    )
+
+
 @router.post("/api/v1/stream/")
 async def query_stream(req: QueryRequest, request: Request = None):
     """SSE stream dispatched by Phase 0 Router:
@@ -2381,6 +2471,93 @@ async def query_stream(req: QueryRequest, request: Request = None):
     if _bctx:
         _bctx.session_id = sid
         _bctx.query = q[:200]
+
+    # ═════════════════════════════════════════════════════════════════
+    # CP5 — SERVER-SIDE SESSION STATE MACHINE (FINDING #15)
+    # ─────────────────────────────────────────────────────────────────
+    # Root-cause fix replacing the symptomatic CP4 pattern-match gates.
+    # Every prior memo-routing gate depended on client-supplied
+    # ``req.history`` — but production UI truncates history on memo
+    # bearing turns (FINDING #12 Cause B). The gates silently evaporate.
+    #
+    # CP5 makes the server the source of truth:
+    #   1. Load SessionState from Redis keyed by session_id.
+    #   2. Append current user turn to state.history.
+    #   3. Use server history as authoritative input to handlers
+    #      (req.history becomes a backup, not the primary source).
+    #   4. If state.phase ∈ {AWAITING_MEMO_DETAILS, AWAITING_MEMO_TOPIC}
+    #      → force handle_memo_smart regardless of query content or
+    #      pattern matching. This is the "state machine wins" rule.
+    #   5. Wrap the response so that on stream completion the
+    #      assistant turn is appended and the phase is transitioned.
+    # ═════════════════════════════════════════════════════════════════
+    _session_state = None
+    _server_history: list[dict] = list(req.history or [])
+    if _SESSION_STATE_AVAILABLE and _load_state is not None:
+        try:
+            _session_state = await _load_state(sid)
+            # Use server history as authoritative IF it's richer than
+            # what the client sent. Empty-history-from-UI is the common
+            # failure mode (FINDING #12 Cause B).
+            if _session_state and len(_session_state.history) > len(_server_history):
+                _server_history = list(_session_state.history)
+                log.info(
+                    "session_state: using server history (%d turns) "
+                    "over client (%d turns)",
+                    len(_server_history), len(req.history or []),
+                )
+            # Append current user turn to state BEFORE any routing.
+            if _session_state is not None:
+                _session_state.append_turn("user", q)
+        except Exception as _e:
+            log.debug("session_state load failed: %s", _e)
+            _session_state = None
+
+    # Make the server history available to downstream handlers by
+    # overwriting req.history — handlers are unchanged, they simply
+    # now receive the authoritative view.
+    if _session_state is not None and len(_server_history) > len(req.history or []):
+        req.history = _server_history
+
+    # ─── Phase-based early routing (replaces CP4 Gates A/B/C/D when
+    # state is authoritative). If the session is in a memo-pending
+    # phase, force-route to handle_memo_smart — ignore query content,
+    # ignore pattern matching, ignore fresh-question override. The
+    # state IS the authority.
+    if (
+        _session_state is not None
+        and _session_state.phase in (
+            _SessionPhase.AWAITING_MEMO_DETAILS,
+            _SessionPhase.AWAITING_MEMO_TOPIC,
+        )
+    ):
+        # Exception: if user clearly pivots to a fresh standalone
+        # question, release the memo state. Otherwise every post-memo
+        # pivot would be dragged back.
+        _q_lower_pivot = (q or "").lower().strip()
+        _FRESH_Q_PIVOTS = (
+            "ما هي عقوبة", "ما عقوبة", "ما هي العقوبة", "ما العقوبة",
+            "ما هي عقوبات", "ما عقوبات",
+            "ما الفرق", "ما الحكم", "ما حكم",
+            "كيف ", "أين ", "متى ", "لماذا", "هل ",
+            "عرفني", "قدم نفسك",
+        )
+        if any(_q_lower_pivot.startswith(p) for p in _FRESH_Q_PIVOTS):
+            log.info(
+                "session_state: phase=%s but user pivoted → reset to IDLE",
+                _session_state.phase.value,
+            )
+            _session_state.reset_memo_state()
+            # Fall through to normal phase0 routing below.
+        else:
+            log.info(
+                "session_state: phase=%s → force handle_memo_smart",
+                _session_state.phase.value,
+            )
+            return _wrap_with_state_save(
+                await handle_memo_smart(q, sid, _server_history),
+                _session_state,
+            )
 
     # ═════════════════════════════════════════════════════════════════
     # Force-Memo Intent Gate (runs BEFORE everything else)
@@ -2522,7 +2699,10 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 )
 
     if _force_memo:
-        return await handle_memo_smart(q, sid, req.history or [])
+        return _wrap_with_state_save(
+            await handle_memo_smart(q, sid, req.history or []),
+            _session_state,
+        )
 
     # ── Gate D (CP4) — structured memo-details response ──
     # Catches the production failure where the user pastes a
@@ -2534,7 +2714,10 @@ async def query_stream(req: QueryRequest, request: Request = None):
     # questions are NOT captured.
     if not _fresh_question and _is_memo_details_response(q, req.history):
         log.info("memo_continuation(D): structured details response → route=memo")
-        return await handle_memo_smart(q, sid, req.history or [])
+        return _wrap_with_state_save(
+            await handle_memo_smart(q, sid, req.history or []),
+            _session_state,
+        )
 
     # ── Phase 0 routing ──
     try:
@@ -2558,29 +2741,50 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 decision["response"], route, conf, chunk_size=40, delay=0.03,
             ):
                 yield frame
-        return StreamingResponse(direct_gen(), media_type="text/event-stream")
+        return _wrap_with_state_save(
+            StreamingResponse(direct_gen(), media_type="text/event-stream"),
+            _session_state,
+        )
 
     # ── Handler routes ──
     try:
         if route == "article_text":
-            return await handle_article_text(decision.get("payload") or {})
+            return _wrap_with_state_save(
+                await handle_article_text(decision.get("payload") or {}),
+                _session_state,
+            )
 
         if route == "table":
-            return await handle_table(decision.get("payload") or {})
+            return _wrap_with_state_save(
+                await handle_table(decision.get("payload") or {}),
+                _session_state,
+            )
 
         if route == "calculator":
-            return await handle_calculator(decision.get("payload") or {})
+            return _wrap_with_state_save(
+                await handle_calculator(decision.get("payload") or {}),
+                _session_state,
+            )
 
         if route == "continuation":
-            return await handle_continuation(
-                decision.get("payload") or {}, req.history or [], q,
+            return _wrap_with_state_save(
+                await handle_continuation(
+                    decision.get("payload") or {}, req.history or [], q,
+                ),
+                _session_state,
             )
 
         if route == "memo":
-            return await handle_memo_smart(q, sid, req.history or [])
+            return _wrap_with_state_save(
+                await handle_memo_smart(q, sid, req.history or []),
+                _session_state,
+            )
 
         # Default: general (LLM + RAG)
-        return await handle_general(q, sid, req.history or [])
+        return _wrap_with_state_save(
+            await handle_general(q, sid, req.history or []),
+            _session_state,
+        )
 
     except Exception as e:
         log.exception("phase0 handler raised (route=%s)", route)
