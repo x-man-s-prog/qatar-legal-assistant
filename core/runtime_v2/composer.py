@@ -587,6 +587,35 @@ def _facts_block(
     return out
 
 
+def _strip_article_metadata(text: str) -> str:
+    """Remove DB-layer metadata that leaks into article citations.
+
+    The DB stores article text prefixed with a row-metadata marker
+    ``"تاريخ بدء العمل : DD/MM/YYYY"`` — a legitimate column in the
+    source table but never something a legal memo should display.
+    Without this strip the memo renders e.g.
+    ``«المادة 168 تاريخ بدء العمل : 28/08/2006 ...»``.
+
+    Fix 1.D — Qatar CP1 commit #2. Conservative regex: only the
+    exact DB marker pattern is stripped. Legal content is preserved.
+
+    Known patterns (extend as discovered):
+      • "تاريخ بدء العمل : DD/MM/YYYY"  (common form)
+      • "تاريخ بدء العمل: DD/MM/YYYY"   (no space before colon)
+    """
+    import re
+    if not text:
+        return text
+    cleaned = re.sub(
+        r"\s*تاريخ\s+بدء\s+العمل\s*:\s*\d{1,2}/\d{1,2}/\d{4}\s*",
+        " ",
+        text,
+    )
+    # Collapse multiple spaces introduced by the substitution
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 def _legal_basis_block(
     domain: Optional[DomainRules],
     paths:  list[PathHypothesis],
@@ -594,7 +623,13 @@ def _legal_basis_block(
 ) -> list[str]:
     """الأسانيد القانونية — expand article_refs into FULL article
     texts via corpus.get_article_text. Fall back to short citations
-    on DB miss."""
+    on DB miss.
+
+    CP1 Fix 1.D: each DB excerpt passes through
+    ``_strip_article_metadata`` before being wrapped in quotes so
+    that row-metadata ("تاريخ بدء العمل : DD/MM/YYYY") never appears
+    inside the legal citation.
+    """
     out: list[str] = ["**ثالثاً: الأسانيد القانونية**"]
 
     # 1) Expanded article texts from DB (if domain provides refs)
@@ -603,6 +638,7 @@ def _legal_basis_block(
     for art_num, law_pat in refs:
         excerpt = article_summary(law_pat, art_num, max_chars=250)
         if excerpt:
+            excerpt = _strip_article_metadata(excerpt)  # Fix 1.D
             out.append(f"• **المادة ({art_num})** — والتي تنص على:")
             out.append(f"  «{excerpt}»")
             expanded += 1

@@ -340,6 +340,40 @@ SCENARIOS = [
     ),
 
     (
+        # ── Fix 1.D: metadata strip from article citations ────────
+        # DB rows store article text prefixed with
+        # "المادة N تاريخ بدء العمل : DD/MM/YYYY" (a row-metadata
+        # leak). Historically this prefix passed through article_summary
+        # and showed up verbatim inside «...» in memos — the third of
+        # the user's four original complaints. Fix 1.D: apply
+        # _strip_article_metadata to every excerpt BEFORE wrapping
+        # in the display quote. Article legal content remains intact;
+        # only the DB metadata marker is removed.
+        # ──────────────────────────────────────────────────────────
+        "h1g_no_metadata_leak_in_articles",
+        [
+            {"role": "user",
+             "content": "اكتب مذكرة اسقاط حضانه ضد طليقتي"},
+            {"role": "assistant",
+             "content": ("قبل ما أكتب مذكرة حضانة احترافية بأسماء "
+                         "ووقائعك الحقيقية، أحتاج منك هذه التفاصيل...")},
+        ],
+        ("1- طفل واحد اسمه احمد وعمره 3 سنوات "
+         "2- السبب سوء سلوك الحاضنة "
+         "3- لا لكن يوجد وثيقة طلاق فقط"),
+        {
+            "want_route": "memo",
+            # Metadata patterns that MUST NOT appear anywhere in memo
+            "must_not_contain": [
+                "تاريخ بدء العمل",
+                "28/08/2006",
+            ],
+            # The article citations themselves must still exist
+            "must_contain": ["المادة"],
+        },
+    ),
+
+    (
         "h4_no_fabricated_names",
         [
             {"role": "user",
