@@ -26,6 +26,7 @@ Memo contract (hardened after the quality audit):
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from core.runtime_v2.types import (
@@ -33,6 +34,23 @@ from core.runtime_v2.types import (
     Pivot, ReasoningMode,
 )
 from core.runtime_v2.corpus import get_article_text, article_summary, get_rulings
+
+log = logging.getLogger(__name__)
+
+# CP1 · Fix 1.A — structured fact extraction (FINDING #13).
+# Gates DomainRules.facts_template and path.markers.supporting_facts
+# against what the user actually said. See composer._facts_block and
+# composer._defenses_block for usage.
+try:
+    from core.fact_extractor import (
+        extract_user_facts_sync as _fe_extract_sync,
+        ExtractedFacts as _ExtractedFacts,
+    )
+    _FACT_EXTRACTOR_AVAILABLE = True
+except Exception as _fe_err:  # pragma: no cover
+    _FACT_EXTRACTOR_AVAILABLE = False
+    _fe_extract_sync = None  # type: ignore
+    _ExtractedFacts = None   # type: ignore
 
 # CP3 · Phase 2 — Precedent Linker integration.
 # Imported lazily/defensively so a missing module never breaks memo
@@ -67,6 +85,255 @@ except Exception:  # pragma: no cover
 
 _BISMILLAH = "بسم الله الرحمن الرحيم"
 _CLOSING   = "والله ولي التوفيق،،"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# CP1 · Fix 1.A — fact_extractor integration helpers (FINDING #13)
+# ═════════════════════════════════════════════════════════════════════
+#
+# Three helpers live here because both _facts_block and _defenses_block
+# need them, and they are ORTHOGONAL to any particular section's logic.
+#
+# 1. _split_combined_query  — rehydrates handle_memo_smart's " | "-joined
+#    combined query back into (current_query, pseudo_history). The
+#    extractor prefers structured history over a flat blob.
+#
+# 2. _marker_aligned_with_user — decides whether a DomainRules FactMarker
+#    (template defense element) is actually supported by what the user
+#    stated. Used to FILTER path.markers in _defenses_block — the root
+#    fix for hallucination Source B (FINDING #13).
+#
+# 3. _STOP_WORDS — tokens common to many custody/nafaqa markers
+#    ("الحاضن", "المحضون", "المدعى عليها", …) whose presence in user
+#    text must NOT count as marker alignment. Without this, every
+#    marker in a custody case would match on "الحاضن" alone.
+
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "الزوج", "الزوجة", "الحاضن", "الحاضنة", "المحضون",
+    "الطرف", "الطرفين", "المدعي", "المدعى", "عليه", "عليها",
+    "بعد", "قبل", "من", "على", "في", "إلى", "مع", "أو",
+    "التي", "الذي", "هذا", "هذه", "ذلك", "تلك",
+})
+
+
+def _split_combined_query(query: str) -> tuple[str, list[dict]]:
+    """Rehydrate handle_memo_smart's `" | "`-joined combined query.
+
+    ``handle_memo_smart`` (routers/query_router.py) pre-joins the last
+    user messages with ``" | "`` so the downstream sync composer still
+    sees the full history via a single ``query`` arg. This helper
+    reverses that: it splits on the exact separator and returns
+    ``(actual_current_query, pseudo_history)`` in the shape
+    ``extract_user_facts_sync`` expects.
+
+    Defensive:
+      • Returns ``(query, [])`` when no `` | `` separator present.
+      • Returns ``(query, [])`` if the final part (intended
+        "current query") is < 3 chars — that means the split was
+        malformed / not actually a combined query.
+      • Never raises.
+    """
+    if not query or " | " not in query:
+        return query, []
+
+    parts = [p.strip() for p in query.split(" | ") if p.strip()]
+    if len(parts) < 2:
+        return query, []
+
+    actual_query = parts[-1]
+    past_parts   = parts[:-1]
+
+    if len(actual_query) < 3:
+        return query, []
+
+    pseudo_history = [
+        {"role": "user", "content": p} for p in past_parts
+    ]
+    return actual_query, pseudo_history
+
+
+_PRAYER_STOP_WORDS: frozenset[str] = frozenset({
+    # Procedural verbs common to almost every prayer bullet
+    "الحكم", "إلزام", "ضم", "تمكين", "تنظيم", "إسقاط", "تثبيت",
+    "بإسقاط", "بإلزام", "بضم", "بتمكين", "بتنظيم", "بتثبيت",
+    # Party references (appear in ~every prayer)
+    "المدعي", "المدعى", "عليه", "عليها", "بوصفه", "المحضون",
+    # Law-citation scaffolding
+    "المادة", "القانون", "لسنة", "الأسرة", "المحكمة",
+    "بموجب", "بالمصاريف", "المحاماة", "أتعاب", "وفق", "وفقاً",
+    # Connectors
+    "على", "من", "في", "إلى", "مع", "أو", "عن", "بعد", "قبل",
+    # Pronouns / determiners
+    "التي", "الذي", "هذا", "هذه", "ذلك", "تلك",
+    "الزوج", "الزوجة", "الحاضن", "الحاضنة",
+    "الطرف", "الطرفين",
+})
+
+
+# Prayer-level red flags. If a prayer ASSERTS one of these substrings,
+# it is auto-rejected regardless of label overlap — these are concrete
+# factual claims the prayer can't make without user confirmation.
+# Keep this list TIGHT; broad phrases will over-filter legitimate
+# prayers. Each entry was observed in h1 forensic probe (Source D)
+# as a hallucinated assertion.
+_PRAYER_POISON_SIGNALS: tuple[str, ...] = (
+    "لزواجها",          # "for her marriage" — asserts marriage happened
+    "لتزوجها",          # variant spelling
+    "من أجنبي",          # "from a foreigner" — asserts foreign spouse
+    "من رجل أجنبي",     # same assertion, fuller form
+    "تزوجت المدعى",     # "المدعى عليها has married"
+    "تزوجت المدعي",     # same, masculine variant
+)
+
+
+# Phase 7 Stretch — standard substantive prayer shape per domain.
+# Used ONLY in the fallback path of _prayers_block (when all domain
+# primary_prayers were filtered as poison). The hint is ALWAYS wrapped
+# in brackets in the output and qualified with "وفق ما يراه المحامي"
+# so the lawyer treats it as a shape suggestion, not an asserted request.
+#
+# Keys are DomainKey.value strings (stable programmatic identifiers,
+# NOT display names which are long Arabic phrases). Only domains with
+# a clear canonical prayer shape are listed. Missing domains fall
+# through to a generic "[يُدرج الطلب الأساسي...]" placeholder.
+_PRAYER_DOMAIN_HINTS: dict[str, str] = {
+    "family_custody":
+        "إسقاط الحضانة عن المُدَّعى عليها وضم المحضون إلى المُدَّعي",
+    "family_nafaqa":
+        "إلزام المُدَّعى عليه بأداء النفقة الواجبة",
+    "divorce_for_harm":
+        "التطليق للضرر",
+    "unlawful_termination":
+        "إلغاء قرار الفصل والتعويض عن الأضرار المادية والمعنوية",
+    "bad_check":
+        "إدانة المُدَّعى عليه وإلزامه بأداء قيمة الشيك والتعويض",
+    "defamation":
+        "إدانة المُدَّعى عليه والتعويض عن الضرر الأدبي",
+    "theft":
+        "إدانة المُدَّعى عليه بالعقوبة المقررة قانوناً",
+    "fraud":
+        "إدانة المُدَّعى عليه ورد ما استولى عليه والتعويض",
+    "fraud_embezzlement":
+        "إدانة المُدَّعى عليه ورد المبلغ المختلس والتعويض",
+    "blackmail_threat":
+        "إدانة المُدَّعى عليه بالعقوبة المقررة قانوناً والتعويض",
+    "assault":
+        "إدانة المُدَّعى عليه بالعقوبة المقررة قانوناً والتعويض عن الإصابات",
+    "forgery":
+        "إدانة المُدَّعى عليه والحكم ببطلان المحرر المزور",
+    "cyber_crime":
+        "إدانة المُدَّعى عليه بالعقوبة المقررة قانوناً",
+    "rental":
+        "إخلاء العين المؤجرة وإلزام المُدَّعى عليه بالمتأخرات",
+}
+
+
+def _prayer_aligned_with_user(prayer: str, user_text: str) -> bool:
+    """Decide whether a ``primary_prayers`` template entry is safe
+    to include given the user's stated facts.
+
+    Rules (applied in order):
+      1. Auto-reject if the prayer contains any ``_PRAYER_POISON_SIGNALS``
+         substring — those are concrete factual assertions we cannot
+         justify without user confirmation.
+      2. Extract "significant" words from the prayer (len >= 4, NOT
+         in ``_PRAYER_STOP_WORDS``). If NONE exist → treat as generic
+         procedural prayer (e.g. "الحكم بقبول الدعوى"), ALLOW it.
+      3. Otherwise require at least ONE significant word to appear in
+         ``user_text``. If yes → aligned. If no → reject.
+
+    More permissive than ``_marker_aligned_with_user`` — prayers are
+    procedural requests, so generic-procedural is fine to pass
+    through. The signal list is the hard gate.
+    """
+    if not prayer:
+        return False
+
+    prayer_lower = prayer.lower()
+
+    # Rule 1: hard reject on POISON_SIGNALS
+    for poison in _PRAYER_POISON_SIGNALS:
+        if poison in prayer_lower:
+            return False
+
+    # Rule 2: significant words — strip punctuation, length/stop filter
+    prayer_words = [
+        w.strip("،.()[]،؛:")
+        for w in prayer.split()
+    ]
+    prayer_words = [
+        w for w in prayer_words
+        if len(w) >= 4 and w not in _PRAYER_STOP_WORDS
+    ]
+
+    # Generic procedural — no significant words → allow
+    if not prayer_words:
+        return True
+
+    # Rule 3: require at least one significant word in user_text
+    for word in prayer_words:
+        if word in user_text:
+            return True
+
+    return False
+
+
+def _marker_aligned_with_user(marker, user_text: str) -> bool:
+    """Check whether a ``FactMarker`` is supported by user's stated text.
+
+    Matching precedence:
+      1. ``marker.keywords`` — most reliable. ANY keyword present in
+         ``user_text`` → aligned.
+      2. Fallback: split ``marker.label``, keep significant words
+         (len >= 4, not in ``_STOP_WORDS``). ANY such word in
+         ``user_text`` → aligned.
+
+    Conservative — requires at least one match. Empty marker → False.
+    """
+    kws = getattr(marker, "keywords", None) or ()
+    for kw in kws:
+        if kw and kw.lower() in user_text:
+            return True
+
+    label = getattr(marker, "label", "") or ""
+    if not label:
+        return False
+
+    label_words = [
+        w for w in label.split()
+        if len(w) >= 4 and w not in _STOP_WORDS
+    ]
+    for word in label_words:
+        if word in user_text:
+            return True
+
+    return False
+
+
+def _extract_for_composer(query: Optional[str]):
+    """Small internal wrapper — runs fact_extractor on a composer-style
+    query (may be pipe-joined combined query), handling all error paths.
+
+    Returns an ``ExtractedFacts`` (possibly empty). NEVER raises.
+    """
+    if not query or not _FACT_EXTRACTOR_AVAILABLE or _fe_extract_sync is None:
+        # Return a safe empty stand-in. Even if ExtractedFacts class
+        # is unavailable (dependency missing), the callers only check
+        # .is_empty() and iterate a few fields — None is handled.
+        return _ExtractedFacts() if _ExtractedFacts is not None else None
+
+    try:
+        actual_query, pseudo_history = _split_combined_query(query)
+        result = _fe_extract_sync(
+            query=actual_query,
+            history=pseudo_history if pseudo_history else None,
+            use_cache=True,
+        )
+        return result
+    except Exception as e:
+        log.warning("composer: fact_extractor sync failed: %s", e)
+        return _ExtractedFacts() if _ExtractedFacts is not None else None
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -211,30 +478,107 @@ def _facts_block(
     user_facts:     list[str] | None,
     established:    list[str],
     facts_template: tuple[str, ...],
+    query:          str | None = None,  # NEW — CP1 · Fix 1.A
 ) -> list[str]:
-    """الوقائع section — three layers merged with no duplicates:
-       1. User's own reported wording (verbatim, quoted).
-       2. Legal-language shaping via the domain's facts_template.
-       3. Fact-markers that fired (domain-internal markers).
+    """Build 'أولاً: الوقائع' — FINDING #13 Source A fix.
+
+    Priority order for fact lines (ONE layer wins, no mixing):
+      A. If ``query`` provided AND fact_extractor finds non-empty user
+         claims → use ONLY those. facts_template is NOT emitted
+         (otherwise domain templates contaminate user facts — that was
+         the h1 / real-user regression).
+      B. Legacy fallback: if ``user_facts`` list was passed in by a
+         caller that doesn't yet supply ``query``, honor it as before.
+      C. Neither A nor B → emit facts_template entries as explicit
+         bracketed placeholders. The user then visually sees they need
+         to fill each slot — never as invented assertions.
+
+    ``established`` (domain-derived system markers, NOT user claims) is
+    always appended at the end — it's not a hallucination risk.
     """
     out = ["**أولاً: الوقائع**"]
-    # Layer 1 — the user's own wording (quoted)
-    u = [f.strip() for f in (user_facts or []) if f and len(f.strip()) >= 4]
-    for f in u[:4]:
-        out.append(f"• أفاد المُستشير بأن: «{f}».")
-    # Layer 2 — legal-language frame
-    for t in facts_template[:4]:
-        out.append(f"• {t}.")
-    # Layer 3 — domain markers that actually matched
-    marker_hits = [
-        m.strip() for m in (established or [])
-        if m and m.strip() not in u
-    ]
-    for m in marker_hits[:3]:
-        out.append(f"• {m}.")
+
+    extracted = _extract_for_composer(query)
+    # A1: gate on `facts_lines` instead of `is_empty()`. The extractor
+    # may return amounts/requests without claims — in that case
+    # `is_empty()` is False but `as_facts_lines()` is []. Using
+    # `facts_lines` as the gate guarantees Path A only fires when it
+    # actually has content to render, letting Path B / C handle the
+    # "claims empty" cases that previously fell into the structural
+    # safety-net bullet alone.
+    facts_lines = extracted.as_facts_lines() if extracted is not None else []
+
+    # ── Path A: extractor produced concrete claims ─────────────
+    if facts_lines:
+        for claim in facts_lines:
+            out.append(f"• أفاد المُستشير بأن: «{claim}».")
+
+        # Gap 1 (Phase 6) — surface structured fields (names, ages,
+        # amounts, dates) that the extractor captured but `claims`
+        # missed. The LLM often condenses multi-item user input into
+        # 2-3 claim sentences and drops specifics into structured
+        # fields. Without this block those specifics never reach the
+        # memo. Emitted as labelled bullets so they read naturally
+        # alongside the narrative claims.
+        enrichment_lines: list[str] = []
+        if extracted is not None:
+            if extracted.names:
+                enrichment_lines.append(
+                    "الأطراف المذكورون: "
+                    + "، ".join(extracted.names[:3])
+                )
+            if extracted.ages:
+                enrichment_lines.append(
+                    "الأعمار المذكورة: "
+                    + "، ".join(extracted.ages[:3])
+                )
+            if extracted.amounts:
+                enrichment_lines.append(
+                    "المبالغ المذكورة: "
+                    + "، ".join(extracted.amounts[:3])
+                )
+            if extracted.dates:
+                enrichment_lines.append(
+                    "التواريخ المذكورة: "
+                    + "، ".join(extracted.dates[:3])
+                )
+        for e in enrichment_lines:
+            out.append(f"• {e}.")
+
+        # A2: explicit placeholder bullet so the user sees that any
+        # unstated details (dates/names/documents) are intentionally
+        # left open. Without this, Path A skips facts_template entirely
+        # and the memo loses the "still-missing" visual signal.
+        out.append(
+            "• [يُدرج ما لم يذكره الموكل من تفاصيل إضافية "
+            "كالأسماء الكاملة والتواريخ الدقيقة والمستندات الداعمة]."
+        )
+    # ── Path B: legacy user_facts — no extractor data available ───
+    elif user_facts:
+        u = [f.strip() for f in user_facts if f and len(f.strip()) >= 4]
+        for f in u[:4]:
+            out.append(f"• أفاد المُستشير بأن: «{f}».")
+        # Mirror of Path A's guidance placeholder — same rationale:
+        # the user sees that unstated details are intentionally open.
+        out.append(
+            "• [يُدرج ما لم يذكره الموكل من تفاصيل إضافية "
+            "كالأسماء الكاملة والتواريخ الدقيقة والمستندات الداعمة]."
+        )
+    # ── Path C: nothing from user — template items as placeholders ─
+    else:
+        for t in facts_template[:4]:
+            out.append(f"• [{t}]")
+
+    # Established markers (system-derived, safe) — always appended.
+    # De-dupe against anything already rendered as a user claim.
+    rendered = " ".join(out)
+    for m in (established or [])[:3]:
+        m_clean = (m or "").strip()
+        if m_clean and m_clean not in rendered:
+            out.append(f"• {m_clean}.")
+
+    # Structural safety: never return an empty الوقائع section.
     if len(out) == 1:
-        # Truly no data — still not a placeholder; state the structural
-        # fact that submissions will be filed.
         out.append(
             "• تقدّم المستندات المؤيدة للوقائع عند جلسة المرافعة "
             "وفق ما يُثبته سجل الدعوى."
@@ -391,38 +735,198 @@ def _rulings_block_from_precedents(
 def _defenses_block(
     domain: Optional[DomainRules],
     paths:  list[PathHypothesis],
+    query:  str | None = None,  # NEW — CP1 · Fix 1.A
 ) -> list[str]:
-    """Develops the client-serving defenses. Uses ONLY paths[0]'s
-    markers (the path aligned with the client). Opposing-side paths
-    are deliberately NOT surfaced in a drafting memo."""
-    if not paths:
-        return []
-    client_path = paths[0]
+    """Build 'ثانياً: الدفوع' — FINDING #13 Source B fix.
+
+    Historically this emitted ALL ``path.markers`` (via
+    ``supporting_facts``) verbatim as defense elements — regardless
+    of whether the user's facts supported them. That leaked template
+    claims like ``«زواج الأم الحاضنة بعد الطلاق»`` into custody
+    memos whose user had only said "سوء سلوك".
+
+    New behavior:
+      • If fact_extractor produced non-empty claims, keep ONLY
+        markers that align with them (``_marker_aligned_with_user``).
+      • If no markers align, fall back to building defenses directly
+        from the user's own claims (no template injection).
+      • If the extractor returned empty (no query, no facts), emit
+        the markers as bracketed placeholders so the user sees them
+        as "fill-in" rather than stated facts.
+    """
     out = ["**ثانياً: الدفوع والأسانيد الموضوعية**"]
-    for f in client_path.supporting_facts[:6]:
-        out.append(f"• يُتمسّك بتحقق عنصر «{f}».")
+
+    if not paths:
+        out.append("• [تُحرَّر الدفوع بناءً على ما يُفيده الموكل].")
+        out.append("")
+        return out
+
+    top_path = paths[0]
+    all_markers = top_path.markers or ()
+
+    extracted = _extract_for_composer(query)
+
+    # No user signal → markers as explicit placeholders
+    if extracted is None or extracted.is_empty():
+        for marker in all_markers[:4]:
+            out.append(f"• [عنصر محتمل: {marker.label}]")
+        out.append("")
+        return out
+
+    # Build a normalised user_text blob for marker matching
+    user_text_parts: list[str] = []
+    user_text_parts.extend(extracted.claims)
+    user_text_parts.extend(extracted.requests)
+    user_text = " ".join(user_text_parts).lower()
+
+    aligned = [
+        m for m in all_markers
+        if _marker_aligned_with_user(m, user_text)
+    ]
+
+    # Phase 7 Stretch — 3-layer defenses for substantive but clean
+    # output. Single-layer output (post-Fix-1.A markers-only) left
+    # custody memos with 1 bullet when all markers were poison-filtered.
+    #
+    #   Layer 1 — aligned markers (domain legal elements, filtered)
+    #   Layer 2 — user claims as defensive statements (ALWAYS added)
+    #   Layer 3 — generic legal defenses (ONLY when Layer 1 empty)
+    #
+    # Layer 3 stays off when Layer 1 has content to avoid noise —
+    # aligned legal elements are already carrying the legal weight.
+    # Layer 2 runs alongside either — facts + law is richer than
+    # either alone, and never invents.
+
+    # Layer 1
+    if aligned:
+        for marker in aligned[:4]:
+            out.append(f"• يُتمسّك بتحقق عنصر «{marker.label}».")
+
+    # Layer 2 — user claims (always, even alongside markers)
+    for claim in extracted.claims[:3]:
+        c = (claim or "").strip()
+        if len(c) >= 8:
+            out.append(f"• يُتمسّك بما أفاد به المُستشير: «{c}».")
+
+    # Layer 3 — generic legal defenses (only when Layer 1 empty)
+    if not aligned:
+        domain_display = (
+            getattr(domain, "display_name", "") or "الدعوى"
+        )
+        out.append(
+            f"• يُتمسّك بما تقرّره نصوص قانون {domain_display} "
+            f"المنطبقة على الوقائع المذكورة."
+        )
+        out.append(
+            "• يُتمسّك بأن مصلحة [المحضون/المدعي/المُوكّل] "
+            "هي المعيار الحاكم في الفصل."
+        )
+
+    # Structural safety: don't return a header-only block.
+    if len(out) == 1:
+        out.append("• [تُحرَّر الدفوع بناءً على ما يُفيده الموكل].")
+
     out.append("")
     return out
 
 
-def _prayers_block(domain: Optional[DomainRules]) -> list[str]:
-    """Prayers — read straight from domain.primary_prayers.
-    If the domain did not supply prayers (older domains), emit a
-    conservative single-line closing that asks the court to apply the
-    law based on what's proven, WITHOUT inviting the opposing outcome.
+def _prayers_block(
+    domain: Optional[DomainRules],
+    query:  str | None = None,  # CP1 · Fix 1.A — FINDING #13 Source D
+) -> list[str]:
+    """Build 'خامساً: الطلبات' — FINDING #13 Source D fix.
+
+    Historically this emitted ``domain.primary_prayers`` verbatim. That
+    leaked template-level factual assertions into the prayers section
+    (e.g. ``"الحكم بإسقاط حضانتها لزواجها من رجل أجنبي عن المحضون"``)
+    even when the user's actual ground was unrelated (e.g. سوء سلوك).
+
+    New behavior:
+      • If ``query`` provided AND fact_extractor finds user facts →
+        filter prayers via ``_prayer_aligned_with_user``. Aligned
+        prayers are emitted verbatim. If none align, fall back to
+        ``extracted.requests`` if any, else a generic placeholder.
+      • If the extractor returned empty (no query or no user signal)
+        → emit prayers as explicit ``[طلب محتمل: ...]`` placeholders
+        so the user sees them as "fill-in" rather than made requests.
+      • Missing / empty ``primary_prayers`` → the existing safe
+        default prayer pair (bottom of function) still applies.
     """
+    default_prayers: tuple[str, ...] = (
+        "الحكم بما يقتضيه القانون بناءً على ما ثبت من وقائع ومستندات.",
+        "إلزام الخصم بالمصاريف ومقابل أتعاب المحاماة.",
+    )
+
     prayers: tuple[str, ...] = tuple()
     if domain and domain.primary_prayers:
         prayers = domain.primary_prayers
     if not prayers:
-        prayers = (
-            "الحكم بما يقتضيه القانون بناءً على ما ثبت من وقائع "
-            "ومستندات.",
-            "إلزام الخصم بالمصاريف ومقابل أتعاب المحاماة.",
-        )
+        prayers = default_prayers
+
     out = ["**خامساً: الطلبات**"]
-    for i, p in enumerate(prayers, 1):
-        out.append(f"{i}. {p}.")
+
+    extracted = _extract_for_composer(query)
+
+    # No user facts — prayers as explicit placeholders.
+    if extracted is None or extracted.is_empty():
+        for i, p in enumerate(prayers[:5], 1):
+            out.append(f"{i}. [طلب محتمل: {p}]")
+        out.append("")
+        out.append(_CLOSING)
+        return out
+
+    # Build user_text blob for prayer alignment
+    user_text_parts: list[str] = []
+    user_text_parts.extend(extracted.claims)
+    user_text_parts.extend(extracted.requests)
+    user_text = " ".join(user_text_parts).lower()
+
+    aligned = [p for p in prayers if _prayer_aligned_with_user(p, user_text)]
+
+    if aligned:
+        for i, p in enumerate(aligned[:5], 1):
+            out.append(f"{i}. {p}.")
+    else:
+        # Phase 6 Gap 2 — NEVER echo user's meta-request ("اكتب مذكرة")
+        # as a legal prayer. Historically the fallback used
+        # ``extracted.requests`` verbatim, which produced quality
+        # defects like ``1. اكتب مذكرة اسقاط حضانه ضد طليقتي`` in
+        # the Prayers section.
+        #
+        # Phase 7 Stretch — when the filter rejected every domain
+        # prayer, we still emit a generic 3-part legal scaffold BUT
+        # the substantive slot (#2) is filled with a domain-specific
+        # hint when available. The hint is WRAPPED IN BRACKETS and
+        # the "وفق ما يراه المحامي" postscript keeps it a suggestion,
+        # not a certainty. No facts asserted — only the standard
+        # prayer shape for the registered domain.
+        domain_label = (
+            getattr(domain, "display_name", "")
+            or "القضية"
+        )
+        # Key by DomainKey.value (stable, programmatic).
+        domain_key_val = ""
+        if domain is not None:
+            _k = getattr(domain, "key", None)
+            if _k is not None:
+                domain_key_val = getattr(_k, "value", "") or str(_k)
+        domain_hint = _PRAYER_DOMAIN_HINTS.get(domain_key_val, "")
+
+        out.append("1. الحكم بقبول الدعوى شكلاً وموضوعاً.")
+        if domain_hint:
+            out.append(
+                f"2. الحكم بـ[{domain_hint} وفق ما يراه المحامي "
+                f"المتابع للقضية بناءً على الوقائع المذكورة]."
+            )
+        else:
+            out.append(
+                f"2. [يُدرج الطلب الأساسي في {domain_label} بناءً على "
+                f"الوقائع المذكورة وما يراه المحامي المتابع للقضية]."
+            )
+        out.append(
+            "3. إلزام المُدَّعى عليها بالمصاريف ومقابل أتعاب المحاماة."
+        )
+
     out.append("")
     out.append(_CLOSING)
     return out
@@ -527,8 +1031,13 @@ def compose_memo(
 
     out: list[str] = []
     out.extend(_memo_header(domain_display, drafting_mode, client_role))
-    out.extend(_facts_block(user_facts, established, facts_template))
-    out.extend(_defenses_block(domain, paths))
+    # CP1 · Fix 1.A — pass ``query`` so _facts_block / _defenses_block
+    # can run the fact_extractor and gate DomainRules templates against
+    # user-stated content. ``query`` is already a compose_memo arg
+    # (passed by pipeline.answer / _build_generic_skeleton), so no
+    # upstream signature churn is required.
+    out.extend(_facts_block(user_facts, established, facts_template, query=query))
+    out.extend(_defenses_block(domain, paths, query=query))
     out.extend(_legal_basis_block(domain, paths, evidence))
 
     # Rulings section: new linker-driven path. When the Precedent Linker
@@ -539,7 +1048,8 @@ def compose_memo(
     else:
         out.extend(_rulings_block(domain))
 
-    out.extend(_prayers_block(domain))
+    # CP1 · Fix 1.A Source D — prayers gated against user-stated facts.
+    out.extend(_prayers_block(domain, query=query))
 
     memo = "\n".join(out).strip()
 

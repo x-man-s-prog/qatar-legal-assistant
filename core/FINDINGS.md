@@ -322,3 +322,141 @@ Memo-path test fixtures MUST include:
   - Post-fix live HTTP verification (logs + response inspection),
     not just pytest green.
 
+## 13. Hallucination Template Layers — FIVE origin points (CP1)
+
+### Discovery
+CP1 investigation into a user-reported regression ("system invented
+'زواج الأم من أجنبي' when user only said 'سوء سلوك'") revealed that
+hallucinated facts in generated memos do not come from a single
+source — they originate from **five distinct template layers**, each
+invisible until the layer above was fixed. Every layer that surfaces
+text into LLM context OR the deterministic composer output is a
+potential hallucination vector.
+
+### The Five Layers
+
+1. **EXPERT_SYSTEM few-shot examples** (``core/prompts.py``)
+   - Fix 1.B: three examples under "مثال صحيح" and "الجانب الإنساني"
+     all featured "زواج الأم من أجنبي" as the canonical custody-
+     removal ground. LLM pattern-completed this into every custody
+     memo regardless of user facts. Plus a fourth poison in the
+     "اسأل قبل ما تصيغ" block listing "متى تزوجت الأم?" as the
+     default custody question.
+   - Replacement: three neutral placeholder-first examples
+     (custody / labour / check) + one open-ended custody ask-template.
+
+2. **``_MEMO_GAPS`` ask-text** (``routers/query_router.py``)
+   - Fix 1.B: six ask-details questions contained parenthetical
+     enumerated examples like ``"(زواج الأم بأجنبي، إهمال، سوء سلوك)?"``.
+     Because the ask-text goes into session history verbatim, the LLM
+     sees all three options on subsequent turns and can pattern-match
+     any of them into the eventual memo.
+   - Replacement: open-ended phrasing, no enumerated reasons, each
+     question self-contained (≥ 8 words).
+
+3. **``DomainRules.facts_template``** (``core/runtime_v2/domains.py``)
+   - Fix 1.A: composer.``_facts_block`` merged user claims with a
+     ``facts_template`` tuple verbatim — domain templates like
+     ``"تزوّجت المُدَّعى عليها من رجل أجنبي عن المحضون بتاريخ [يُدرج]..."``
+     injected as if they were user-stated facts.
+   - Replacement: ``extract_user_facts_sync`` gates. When extractor
+     produces claims, facts_template is SKIPPED entirely. When
+     extractor is empty, template items render as bracketed
+     ``[placeholder]`` only — never as assertions.
+
+4. **``DomainRules.paths.markers``** (same module)
+   - Fix 1.A Path X: composer.``_defenses_block`` emitted every
+     marker's label as a defense element, producing
+     ``"يُتمسّك بتحقق عنصر «زواج الأم الحاضنة بعد الطلاق»"`` in
+     custody memos whose user said only "سوء سلوك".
+   - Replacement: ``_marker_aligned_with_user`` filters markers by
+     keyword + label-word overlap with extracted user text
+     (``_STOP_WORDS`` filter prevents trivial matches). Only aligned
+     markers render; misaligned markers do not enter the memo.
+
+5. **``DomainRules.primary_prayers``** (same module) — **DISCOVERED
+   LATE; would have been MASKED by a broader regex patch had the
+   "probe before A3" rule not been enforced**
+   - Fix 1.A Path X-prayers: composer.``_prayers_block`` emitted
+     every domain prayer verbatim, including
+     ``"الحكم بإسقاط حضانة ... لزواجها من رجل أجنبي عن المحضون"``.
+   - Replacement: ``_prayer_aligned_with_user`` + tight
+     ``_PRAYER_POISON_SIGNALS`` blacklist auto-rejects prayers that
+     ASSERT unstated facts. Prayers with no significant words
+     (pure procedural) still pass.
+
+### CP1 Refinements (same commit — quality gates beyond the 5 layers)
+
+Beyond closing the 5 poison layers, Phase 6+7 closed three memo-
+quality gaps surfaced by the live user demo:
+
+**Gap 1 (Phase 6) — ``_facts_block`` rendered only ``claims``.**
+The fact extractor's structured fields (``names``, ``ages``,
+``amounts``, ``dates``) never reached the memo text. Fix: emit
+labelled enrichment bullets ("الأطراف المذكورون: …",
+"الأعمار المذكورة: …") after the claims loop.
+
+**Gap 2 (Phase 6) — ``_prayers_block`` fallback echoed user's
+meta-request.** When all domain prayers were filtered as poison,
+the fallback used ``extracted.requests`` verbatim — producing
+prayers like ``"1. اكتب مذكرة اسقاط حضانه ضد طليقتي"``. Fix:
+deterministic three-part legal scaffold (accept-plea + placeholder
+substantive + costs). Never uses ``extracted.requests``.
+
+**Phase 7 defenses enrichment.** Single-layer output dropped from
+3 (poisoned) bullets to 1 (claim echo) after Fix 1.A Path X. Fix:
+three-layer output — (1) aligned markers when any, (2) user claims
+always alongside, (3) generic legal defenses as fallback
+("يُتمسّك بما تقرّره نصوص قانون …", "يُتمسّك بأن مصلحة …").
+
+**Phase 7 prayer domain hints.** Added ``_PRAYER_DOMAIN_HINTS``
+dict mapping ``DomainKey.value`` → standard substantive prayer
+shape (e.g. "إسقاط الحضانة وضم المحضون" for custody). Used in the
+generic fallback's prayer #2 slot, wrapped in brackets with
+"وفق ما يراه المحامي" qualifier so it reads as shape suggestion,
+not asserted request.
+
+### Root-Cause Rule — Probe Before Patch
+
+When a filter fails to catch poison, ALWAYS probe the actual output
+before broadening the filter. A broader filter silently masks
+deeper layers. During CP1:
+
+  - Fix 1.B closed Layers 1 + 2 → probe revealed Layer 3.
+  - Fix 1.A (facts_block) closed Layer 3 → regression revealed
+    Layer 4 was also contributing.
+  - Fix 1.A Path X closed Layer 4 → FORENSIC PROBE (not a broader
+    regex) revealed Layer 5 in prayers.
+
+If we had applied the proposed "broader ``«...»`` regex" (Fix A3),
+Layer 5 would have been masked indefinitely — every custody memo
+would silently ship "لزواجها من رجل أجنبي عن المحضون" in the
+Prayers section.
+
+### Protocol Update — Domain Template Audit
+
+Before deploying new ``DomainRules`` entries for any topic:
+
+- [ ] ``facts_template``: no specific reasons / amounts / dates /
+      names. Only legal-language neutral frame.
+- [ ] ``paths.markers``: each marker has both a ``label`` and
+      ``keywords`` tuple that actually overlaps with likely user
+      wording (not just the label's stop-words).
+- [ ] ``primary_prayers``: gate-compatible or marked as
+      default-generic (procedural only).
+- [ ] ``_PRAYER_POISON_SIGNALS`` updated if the domain introduces
+      a new concrete factual assertion that would need to be
+      auto-rejected.
+- [ ] Test scenario where user facts CONTRADICT the template
+      (not just confirm it) is green.
+
+### Scheduled Follow-up
+
+- Fix 1.D (CP1 commit #2): metadata strip
+  ("تاريخ بدء العمل : DD/MM/YYYY") from article citations in
+  ``_legal_basis_block``.
+- CP2: Article sub-clause filtering against user facts (full Fix 1.D).
+- CP3: LLM pre-generation guard (Fix 1.C) as defense-in-depth.
+- Future: Domain Template Audit tool scanning ``DomainRules`` for
+  common poison patterns automatically.
+
