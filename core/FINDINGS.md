@@ -460,3 +460,175 @@ Before deploying new ``DomainRules`` entries for any topic:
 - Future: Domain Template Audit tool scanning ``DomainRules`` for
   common poison patterns automatically.
 
+## 14. Context Propagation Across Memo Turns (CP4)
+
+### Discovery
+CP1 closed hallucination on its five template layers. CP4 surfaced
+three ORTHOGONAL failures when the user ran a realistic multi-turn
+session after the CP1 deploy:
+
+  T1: "ما هي عقوبات المرور"                      → general
+  T2: "اكتب لي مذكرة اسقاط حضانه ضد طليقتي"     → memo_ask_details  ✓
+  T3: "1- احمد 3 سنوات  2- سوء سلوكها ...
+       3- لا لكن يوجد وثيقة طلاق بتاريخ ..."      → general  ✗ (should be memo)
+  T4: "طيب اكتب المذكرة"                          → memo_ask_topic ✗ (lost topic)
+  T5: "ذكرت الموضوع في الرسالة السابقة"         → "لا أملك تفاصيل" ✗
+  T6: "ما هي عقوبة تركيب اصوات مزعجة"            → flag-insult penalties ✗
+  T7: "ما هي العقوبة بالضبط"                     → flag-insult penalties ✗
+
+Three distinct systemic failures:
+
+### Cause A — Numbered-list details missed by Gates A/B/C
+
+Existing memo-continuation gates in ``query_stream``:
+- Gate A: matches memo-ask indicators in the FULL history blob.
+- Gate B: matches memo keyword in prior user + short command now.
+- Gate C: matches memo keyword in CURRENT query.
+
+T3 is a structured response to T2's ask_details, but:
+- It contains NO memo keyword (Gate C miss).
+- T2 was a user memo request, but T3 is neither short nor a
+  short-command match (Gate B miss).
+- Gate A should have fired but the UI-truncation issue
+  (FINDING #12 Cause B) means the server does NOT always see
+  T2's assistant text in ``req.history``.
+
+**Fix 1 (Gate D) — ``_is_memo_details_response`` in
+``routers/query_router.py``.** Pure predicate:
+  1. Most recent assistant message contains a memo-ask indicator.
+  2. Current query is either a numbered list (``1-``, ``1.``),
+     multi-detail (``≥ 2`` newlines or Arabic commas), or a
+     direct-answer starter (نعم / اسمه / الراتب / ...).
+  3. Fresh-question prefixes (``ما هي عقوبة`` / ``كيف`` / ...)
+     auto-disqualify the query — critical defence against T6-type
+     over-trigger after a session already held a memo exchange.
+
+Wired directly after Gates A-C, before phase0 routing.
+
+### Cause B — Session topic lost after the ask-details turn
+
+``handle_memo_smart`` detects the memo topic on every call from the
+current query alone. When the user types ``"اكتب المذكرة"`` as a
+standalone follow-up:
+- ``_detect_memo_topic`` returns ``"عام"`` (no topic keyword).
+- The history-walk recovery looks at prior USER messages, but the
+  earliest user message that MENTIONED a topic is T2; the
+  ``memo_continuation`` gate already fired on its own, so T4
+  enters ``handle_memo_smart`` fresh. The recovery walk then
+  looks at short nags in user history and misses the concrete
+  topic established in T2.
+- The ``ask_topic_gen`` branch fires → topic is asked again.
+
+**Fix 2 (session topic memory) — new
+``core/session_topic_memory.py`` module.** Redis-backed store
+(db=2, TTL 1h) with:
+
+- ``set_session_topic(sid, topic)`` / ``get_session_topic(sid)``
+  async primaries.
+- ``set_session_topic_sync(sid, topic)`` /
+  ``get_session_topic_sync(sid)`` sync wrappers via the proven
+  ``_corpus_bg`` background loop.
+- Refuses to store ``"عام"``: the sentinel "no topic".
+- All Redis failures → warning log + ``None``/``False``. Never
+  raises. Pre-CP4 behaviour is the safe degraded path.
+
+Integration in ``handle_memo_smart``:
+1. On entry: try ``get_session_topic_sync(sid)``. If non-empty,
+   prefer it over the "عام" fallback of ``_detect_memo_topic``.
+2. After topic is decided: if concrete, call
+   ``set_session_topic_sync(sid, topic)``.
+3. The ``ask_topic_gen`` branch now carries a fourth guard: skip
+   the topic-ask if the session already holds a stored topic
+   (defence in depth — the merge in step 1 already handles it).
+
+### Cause C — Irrelevant criminal chunks for sub-domain queries
+
+``_filter_chunks_by_domain`` operates on coarse buckets:
+criminal / labor / family / commercial. A traffic-noise query like
+``"ما هي عقوبة تركيب اصوات مزعجة على السيارة"`` contains ``"عقوبة"``
+→ classified as criminal → all criminal chunks pass, including
+flag-insult, cyber-crimes, and hiding-criminals.
+
+**Fix 3 (sub-domain relevance filter) — adds a second narrower
+pass in ``handle_general``.** New ``_detect_query_subdomain`` and
+``_filter_retrieved_chunks_by_subdomain`` in
+``routers/query_router.py``. Signals:
+
+- ``_TRAFFIC_SIGNALS`` (traffic law specific)
+- ``_SUBDOMAIN_LAW_PATTERNS``: {"traffic": ("المرور","مرور"), ...}
+
+When a sub-domain is detected, ``law_name`` on each retrieved
+chunk must match the sub-domain pattern to survive. If the
+filter produces an EMPTY set after sub-domain narrowing, the
+handler flips into Fix 4's degradation path (not an unfiltered
+fallback).
+
+### Cause D — Hallucinated answers from weak retrieval matches
+
+Before CP4, when the retrieval returned nothing relevant, the LLM
+was handed whatever it got and invented answers from weak matches.
+
+**Fix 4 (degradation path) — explicit honest response.** When Fix
+3's sub-domain filter empties ``sources``, ``handle_general``
+short-circuits into a polite degradation message:
+
+> "لا تتوفر لديّ نصوص قانونية محددة تجيب على سؤالك بدقة في
+>  الوقت الحالي. موضوع استفسارك يتعلق بـ... وهو مجال لم تُسترجع
+>  له نصوص مباشرة. أنصحك بالرجوع إلى ..."
+
+Route tag: ``general_degraded``. No LLM call. Clients can surface
+a subtle UI hint. No hallucination path.
+
+### The Fresh-Question Override
+
+CP4 also surfaces a subtle FEEDBACK between Gates A/B and
+long-session state: after a memo cycle, the history blob keeps
+matching memo-ask indicators forever, so Gates A/B would route
+every subsequent turn to the memo handler — including pivots
+to unrelated factual questions.
+
+Placed BEFORE the Gate A/B/C/D cluster:
+
+    _FRESH_Q_PREFIXES = (
+        "ما هي عقوبة", "ما عقوبة", "ما هي العقوبة",
+        "ما الفرق", "كيف ", "أين ", "متى ", "هل ", ...
+    )
+    if query starts with any prefix → ALL memo gates are skipped.
+
+Safe because the same prefixes are also excluded inside Gate D
+itself (``_GATE_D_FRESH_QUESTION_PREFIXES``).
+
+### Test Coverage
+
+- ``tests/test_session_topic_memory.py`` — 5 unit tests covering
+  the async/sync API, "عام" rejection, missing-session, overwrite.
+- ``tests/test_gate_d_memo_details.py`` — 6 unit tests covering
+  numbered list, multi-comma, direct-answer starter, no-prior-ask,
+  empty history, unrelated-query (negative).
+- ``tests_context_propagation.py`` — 14-assertion integration
+  suite replaying the exact production 7-turn scenario.
+
+### Protocol Update
+
+Multi-turn session tests must include at least one **topic pivot**
+— e.g. a traffic/general question AFTER a memo turn — so that
+memo-continuation gates cannot silently swallow future standalone
+questions. Gate D + the fresh-question override must both pass on
+this pivot scenario.
+
+Session-scoped state (like the topic) must never ONLY live in
+handler scope. Redis db=2 is the existing bucket for such state;
+a new store goes there with a clear key prefix
+(``session_topic:``) and a TTL matching the session duration.
+
+### Scheduled Follow-up
+
+- CP5: unify ``_MEMO_TOPIC_MAP`` (query_router) and ``_GENERIC_CUES``
+  (pipeline) into a single topic registry (FINDING #12 already
+  scheduled this).
+- CP5: extend ``_SUBDOMAIN_LAW_PATTERNS`` to cover the remaining
+  Qatari legal families once traffic is battle-tested.
+- CP5: ``general_degraded`` route should be surfaced in the UI with
+  a visible indicator — currently clients treat it identically
+  to a normal general answer.
+

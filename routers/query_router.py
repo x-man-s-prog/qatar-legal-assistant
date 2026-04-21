@@ -719,6 +719,107 @@ _COMMERCIAL_SIGNALS = (
     "وكيل تجاري", "علامة تجارية", "سجل تجاري",
 )
 
+# CP4 Fix 3 — sub-domain filter for traffic. Historic filter routed
+# traffic queries ("عقوبة تركيب اصوات مزعجة على السيارة") to the
+# generic _CRIMINAL bucket and returned flag-insult / cyber-crime
+# chunks because "عقوبة" matched criminal but no intra-criminal
+# discrimination existed. This sub-domain layer narrows criminal
+# hits to traffic-law chunks when traffic signals dominate.
+_TRAFFIC_SIGNALS = (
+    "مرور", "مركبة", "مركبات", "سيارة", "سيارات", "رخصة قيادة",
+    "رخصة السير", "سحب الرخصة", "إشارة", "إشارات", "سرعة",
+    "أصوات مزعجة", "اصوات مزعجة", "تلوث ضوضاء", "ضوضاء",
+    "حادث مروري", "حادث سير", "قيادة",
+)
+
+# Maps sub-domain label → substrings that MUST appear in `law_name`
+# or content for a chunk to count as topically on-target.
+_SUBDOMAIN_LAW_PATTERNS: dict[str, tuple[str, ...]] = {
+    "traffic":   ("المرور", "مرور", "مركبة", "سيارة"),
+    "family":    ("الأسرة", "أسرة", "أحوال شخصية"),
+    "labor":     ("العمل", "عمل"),
+    "rental":    ("الإيجار", "إيجار"),
+    "commercial":("التجاري", "تجاري", "تجارة", "شركات"),
+}
+
+# Narrowing (beyond the coarse criminal / labor / family / commercial
+# filter) is ONLY applied for sub-domains that are cross-cutting or
+# under-represented in coarse buckets. "traffic" lives inside criminal
+# for the coarse filter — the narrow layer is what prevents
+# flag-insult / cyber-crime chunks from answering a traffic-noise
+# question.
+#
+# labor / family / rental / commercial are already well-served by
+# ``_filter_chunks_by_domain``; narrowing them again would empty
+# legitimate retrievals (see CP4 regression on case_memory E2E).
+_NARROWING_SUBDOMAINS: frozenset[str] = frozenset({"traffic"})
+
+
+def _detect_query_subdomain(query: str) -> Optional[str]:
+    """Detect a narrower sub-domain (e.g. 'traffic') from the query.
+
+    Returns a sub-domain label that maps to ``_SUBDOMAIN_LAW_PATTERNS``,
+    or ``None`` when the query stays at the generic-criminal level.
+    Pure function. Safe in the hot path.
+    """
+    if not query:
+        return None
+    q = query.lower()
+    if any(s in q for s in _TRAFFIC_SIGNALS):
+        return "traffic"
+    if any(s in q for s in _FAMILY_SIGNALS):
+        return "family"
+    if any(s in q for s in _LABOR_SIGNALS):
+        return "labor"
+    # "إيجار" / "مستأجر" / "مؤجر" live outside the current signal
+    # tuples — reuse by substring probe.
+    if any(tok in q for tok in ("إيجار", "ايجار", "مؤجر", "مستأجر")):
+        return "rental"
+    if any(s in q for s in _COMMERCIAL_SIGNALS):
+        return "commercial"
+    return None
+
+
+def _filter_retrieved_chunks_by_subdomain(
+    chunks: list[dict],
+    subdomain: Optional[str],
+) -> list[dict]:
+    """CP4 Fix 3 — keep only chunks whose ``law_name`` OR content
+    matches the detected sub-domain.
+
+    Narrowing applies ONLY to sub-domains in
+    ``_NARROWING_SUBDOMAINS`` (currently: traffic). Other sub-domains
+    are already handled adequately by ``_filter_chunks_by_domain``,
+    and a second-pass narrow would empty their legitimate retrievals
+    (labor/family chunks often carry law_name with varying formats,
+    e.g. "قانون العمل" vs numeric-only, making a pure law_name
+    criterion over-restrictive).
+
+    Returns:
+      • Input unchanged if subdomain is None, not mapped, or not in
+        the narrowing set.
+      • Narrowed list when at least one chunk matches the patterns.
+      • Empty list when narrowing is active AND no chunk matches
+        — signals to the caller that degradation (Fix 4) should fire.
+    """
+    if not chunks or not subdomain:
+        return chunks
+    if subdomain not in _NARROWING_SUBDOMAINS:
+        return chunks
+    patterns = _SUBDOMAIN_LAW_PATTERNS.get(subdomain)
+    if not patterns:
+        return chunks
+
+    out: list[dict] = []
+    for ch in chunks:
+        law = (ch.get("law_name") or "").lower()
+        content = (ch.get("content") or "").lower()
+        # Match on law_name OR content — content match catches chunks
+        # whose law_name field is empty or in a non-canonical form.
+        if any(p in law for p in patterns) or any(p in content for p in patterns):
+            out.append(ch)
+    return out if out else []
+
 
 def _filter_chunks_by_domain(
     chunks: list[dict], query: str,
@@ -865,6 +966,76 @@ async def handle_general(
                     sources = _filter_chunks_by_domain(sources, query)
                 except Exception as e:
                     log.debug("domain filter miss: %s", e)
+
+            # ── CP4 Fix 3 — sub-domain relevance filter ──
+            # After the coarse domain bucket filter (criminal / labor /
+            # family / commercial), apply a narrower law_name filter
+            # when the query has a specific sub-domain signal (e.g.
+            # traffic). Prevents "عقوبة تركيب اصوات مزعجة" from
+            # pulling flag-insult / cyber-crime chunks.
+            _subdomain = None
+            if sources:
+                try:
+                    _subdomain = _detect_query_subdomain(query)
+                    if _subdomain:
+                        _narrowed = _filter_retrieved_chunks_by_subdomain(
+                            sources, _subdomain,
+                        )
+                        if _narrowed:
+                            log.info(
+                                "relevance_filter: subdomain=%s "
+                                "%d→%d chunks",
+                                _subdomain, len(sources), len(_narrowed),
+                            )
+                            sources = _narrowed
+                        else:
+                            # No chunk matches the sub-domain law_name.
+                            # Flag for the CP4 Fix 4 degradation path.
+                            log.warning(
+                                "relevance_filter: subdomain=%s has NO "
+                                "matching chunks → degradation path",
+                                _subdomain,
+                            )
+                            sources = []
+                except Exception as e:
+                    log.debug("subdomain filter miss: %s", e)
+
+            # ── CP4 Fix 4 — degradation path ──
+            # When retrieval has been exhausted (sub-domain filter
+            # removed everything and the query HAD a specific domain)
+            # we must NOT hallucinate from weak matches. Emit an
+            # honest short response telling the user we don't have
+            # authoritative text for this specific sub-domain.
+            if _subdomain and not sources:
+                degraded = (
+                    "لا تتوفر لديّ نصوص قانونية محددة تجيب على سؤالك "
+                    "بدقة في الوقت الحالي. موضوع استفسارك يتعلق بـ"
+                    f"«{_subdomain}» — وهو مجال لم تُسترجع له نصوص "
+                    "مباشرة من قاعدة البيانات.\n\n"
+                    "أنصحك بالرجوع إلى:\n"
+                    "• النص القانوني الرسمي المنشور في الجريدة الرسمية.\n"
+                    "• استشارة محامٍ متخصص في هذا المجال.\n\n"
+                    "هل يمكنك إعادة صياغة السؤال بتفاصيل أكثر، أو "
+                    "تحديد المادة القانونية المعنية إن كنت تعرفها؟"
+                )
+                yield _sse({
+                    "type": "chunk", "content": degraded, "text": degraded,
+                    "authoritative_path": "runtime_v2",
+                    "runtime_authority": "runtime_v2",
+                })
+                yield _sse(_stamp_authority({
+                    "type": "done",
+                    "route": "general_degraded",
+                    "runtime": "phase0_general",
+                    "sources": [],
+                    "confidence": 0,
+                    "is_grounded": False,
+                    "log_id": 0,
+                    "gates_passed": ["relevance_degradation"],
+                    "gates_failed": [],
+                    "block_reasons": [],
+                }))
+                return
 
             # M3: Supplementary search for missing topics in complex queries
             if sources and len(query.split()) >= 8:
@@ -1810,6 +1981,113 @@ def _is_force_memo_request(query: str) -> bool:
     )
 
 
+# ═════════════════════════════════════════════════════════════════
+# Gate D — Structured memo-details response detector (CP4 FINDING #14)
+# ─────────────────────────────────────────────────────────────────
+# Catches the production failure where the user answers a prior
+# memo_ask_details prompt with a numbered list or multi-detail blob,
+# but the query itself lacks a memo keyword → Gates A/B/C may miss
+# it (especially when the client UI truncated history, see FINDING
+# #12 Cause B).
+#
+# Trigger: the most recent ASSISTANT message must contain a memo-ask
+# indicator AND the current query must have ONE of:
+#   1. Numbered list (``1-`` / ``1.`` / ``1)``)
+#   2. ≥2 newlines OR ≥2 Arabic commas (``،``)
+#   3. Direct answer starter (نعم / لا / اسمه / عمره / بتاريخ / السبب)
+#
+# False-positive hedge: the SAME message must NOT look like a fresh
+# topic question (keywords like "ما عقوبة" / "ما الفرق بين").
+# ═════════════════════════════════════════════════════════════════
+
+_GATE_D_ASK_INDICATORS = (
+    "أحتاج منك هذه التفاصيل",
+    "احتاج منك هذه التفاصيل",          # without hamza
+    "أحتاج منك التفاصيل",
+    "احتاج منك التفاصيل",
+    "قبل ما أكتب مذكرة",
+    "قبل ما اكتب مذكرة",
+    "قبل ما أكتب مذكره",
+    "قبل ما اكتب مذكره",
+    "لصياغة مذكرة",
+    "ما أعمار الأطفال",
+    "ما السبب الذي يدفعك",
+    "ما سبب طلب",
+    "أخبرني بما تعرفه",
+)
+
+_GATE_D_ANSWER_STARTERS = (
+    "نعم", "لا", "اسمه", "اسمها", "عمره", "عمرها",
+    "بتاريخ", "السبب", "الراتب", "المبلغ", "الموضوع",
+)
+
+# Guards against false-positives: a query that LOOKS like an answer
+# but is actually a fresh question (e.g. "ما عقوبة..." literally
+# contains "ما" which never should fire Gate D).
+_GATE_D_FRESH_QUESTION_PREFIXES = (
+    "ما عقوبة", "ما عقوبه", "ما هي عقوبة", "ما هي عقوبه",
+    "ما الفرق", "ما الحكم", "كيف", "هل ", "أين", "متى",
+    "كم المبلغ", "كم المدة", "كم مدة",
+)
+
+
+def _is_memo_details_response(
+    query: str,
+    history: list | None,
+) -> bool:
+    """Detect whether ``query`` is a structured response to a prior
+    memo_ask_details prompt.
+
+    Returns True iff:
+      • history exists AND the most recent assistant message contains
+        a memo-ask indicator from ``_GATE_D_ASK_INDICATORS``, AND
+      • ``query`` either: starts with a numbered-list marker (``1-``,
+        ``1.``, ``1)``), contains ≥ 2 newlines or ≥ 2 Arabic commas,
+        or starts with one of ``_GATE_D_ANSWER_STARTERS``.
+
+    Returns False if the query looks like a fresh standalone question
+    (starts with ``ما``/``كيف``/etc.) — protects against over-trigger.
+
+    Pure function. No side effects. Safe to call in the hot path.
+    """
+    if not history or not query:
+        return False
+
+    # Find the most recent assistant message
+    last_assistant = ""
+    for msg in reversed(history):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            last_assistant = (msg.get("content") or "")
+            break
+    if not last_assistant:
+        return False
+
+    # Prior assistant must have been asking for memo details
+    if not any(ind in last_assistant for ind in _GATE_D_ASK_INDICATORS):
+        return False
+
+    q = query.strip()
+    q_lower = q.lower()
+
+    # Hedge: reject queries that look like fresh standalone questions
+    if any(q_lower.startswith(p) for p in _GATE_D_FRESH_QUESTION_PREFIXES):
+        return False
+
+    # Pattern 1 — numbered list marker anywhere in first 20 chars
+    if re.search(r"[1-9][\-\.\)]\s", q[:40]):
+        return True
+
+    # Pattern 2 — multi-detail (≥2 newlines OR ≥2 Arabic commas)
+    if q.count("\n") >= 2 or q.count("،") >= 2:
+        return True
+
+    # Pattern 3 — direct-answer starter
+    if any(q.startswith(s) for s in _GATE_D_ANSWER_STARTERS):
+        return True
+
+    return False
+
+
 def _count_signals(text: str) -> int:
     """Rough signal count — names, numbers, dates, content length.
 
@@ -1880,7 +2158,25 @@ def _compute_memo_signals(
 async def handle_memo_smart(
     query: str, sid: str, history: list,
 ) -> StreamingResponse:
+    # CP4 Fix 2 — session topic memory: try stored topic FIRST.
+    # When the user says "اكتب المذكرة" or similar standalone request
+    # AFTER a previous turn already established a topic, the stored
+    # value wins over re-detection from the empty current query.
+    _stored_topic: str | None = None
+    try:
+        from core.session_topic_memory import get_session_topic_sync
+        _stored_topic = get_session_topic_sync(sid)
+    except Exception as _stm_err:
+        log.debug("memo_smart: session_topic get failed: %s", _stm_err)
+        _stored_topic = None
+
     topic = _detect_memo_topic(query)
+
+    # If the current query did not disclose a topic, prefer the
+    # stored one (if any) over the "عام" fallback.
+    if topic == "عام" and _stored_topic:
+        topic = _stored_topic
+        log.info("memo_smart: topic recovered from session store → %s", topic)
 
     # ═══ Topic recovery from any prior user turn ═══
     # "اكتب المذكرة" as a standalone nag carries no topic keyword; pull
@@ -1903,6 +2199,14 @@ async def handle_memo_smart(
                 )
                 break
 
+    # CP4 Fix 2 — persist detected topic (only when concrete).
+    if topic and topic != "عام":
+        try:
+            from core.session_topic_memory import set_session_topic_sync
+            set_session_topic_sync(sid, topic)
+        except Exception as _stm_err:
+            log.debug("memo_smart: session_topic store failed: %s", _stm_err)
+
     # ═══ Fix B — fail-loud topic ask (no silent generic fallback) ═══
     # If topic is STILL "عام" after recovery AND there is no history
     # context AND the query itself contains no DOMAIN_KEYWORDS hint,
@@ -1920,10 +2224,17 @@ async def handle_memo_smart(
     #   1. topic == "عام"           — memo-topic map found nothing
     #   2. len(history or []) < 2   — no session context to stand on
     #   3. not _has_memo_topic(q)   — query has no DOMAIN keyword
+    # CP4 Fix 2 — additional guard: if this session already stored a
+    # concrete topic, NEVER fall into ask_topic_gen (we'd re-ask the
+    # user a question they already answered). The stored value was
+    # just merged into `topic` above; this re-check is belt+braces.
+    _session_has_stored_topic = bool(_stored_topic)
+
     if (
         topic == "عام"
         and len(history or []) < 2
         and not _has_memo_topic((query or "").lower())
+        and not _session_has_stored_topic
     ):
         async def ask_topic_gen():
             text = (
@@ -2111,8 +2422,33 @@ async def query_stream(req: QueryRequest, request: Request = None):
     #   (C) current message contains explicit memo keyword
     #       (محاولة أخيرة — phase0 قد يفوّت «يلا اكتب المذكرة»)
     # ═════════════════════════════════════════════════════════════════
+    # ── CP4: Fresh-question override (FINDING #14) ───────────────
+    # Once a session has had a memo exchange, Gates A/B leak into
+    # every subsequent turn because the memo-ask indicators persist
+    # in the history blob. A user who pivots with a standalone
+    # factual question ("ما هي عقوبة تركيب اصوات مزعجة") would be
+    # dragged back into the memo path forever. The override shuts
+    # off memo continuation (all 4 gates) when the CURRENT query
+    # is a textbook standalone question.
+    _fresh_question = False
+    if req.history:
+        _q_lower_fresh = (q or "").lower().strip()
+        _FRESH_Q_PREFIXES = (
+            "ما هي عقوبة", "ما عقوبة", "ما عقوبه",
+            "ما هي العقوبة", "ما العقوبة",
+            "ما هي عقوبات", "ما عقوبات",
+            "ما الفرق", "ما الحكم", "ما حكم",
+            "كيف ", "أين ", "متى ", "لماذا", "هل ",
+            "كم المبلغ", "كم المدة", "كم مدة",
+        )
+        if any(_q_lower_fresh.startswith(p) for p in _FRESH_Q_PREFIXES):
+            _fresh_question = True
+            log.info(
+                "memo_continuation: fresh-question override → skip all gates"
+            )
+
     _force_memo = False
-    if req.history and len(req.history) >= 2:
+    if not _fresh_question and req.history and len(req.history) >= 2:
         _hist_assistant_blob = " ".join(
             (m.get("content") or "") for m in req.history
             if m.get("role") == "assistant"
@@ -2186,6 +2522,18 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 )
 
     if _force_memo:
+        return await handle_memo_smart(q, sid, req.history or [])
+
+    # ── Gate D (CP4) — structured memo-details response ──
+    # Catches the production failure where the user pastes a
+    # numbered list / multi-detail blob in response to a prior
+    # memo_ask_details prompt, but without any memo keyword. Gates
+    # A/B/C miss this when the keyword is absent AND when the UI
+    # truncated history. Pure function; no side effects.
+    # Respects the fresh-question override so standalone factual
+    # questions are NOT captured.
+    if not _fresh_question and _is_memo_details_response(q, req.history):
+        log.info("memo_continuation(D): structured details response → route=memo")
         return await handle_memo_smart(q, sid, req.history or [])
 
     # ── Phase 0 routing ──
