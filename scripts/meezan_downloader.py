@@ -218,6 +218,7 @@ def download_law(law_id: int, *, sleep: float = 0.3, skip_existing: bool = True)
     tree_ids = _extract_tree_ids(lawpage_html)
     summary["tree_ids"] = tree_ids
     if not summary.get("lawview_has_content", False):
+        for tid in tree_ids:
             art_url = f"{BASE}/LawArticles.aspx?LawTreeSectionID={tid}&lawId={law_id}&language=ar"
             status, body, _ = _fetch(art_url)
             if status == 200 and len(body) > 500:
