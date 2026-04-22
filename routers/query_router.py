@@ -1537,19 +1537,80 @@ async def handle_general(
         # M5: dynamic max_tokens — 2200 for complex, 1200 for simple
         _max_tok = 2200 if _is_complex else 1200
 
-        # ── Stream + capture full answer for Answer Memory ──
+        # ═══════════════════════════════════════════════════════════
+        # CP7 — Legal Answer Engine (reasoning layer for Q&A)
+        # ─────────────────────────────────────────────────────────────
+        # Before streaming a raw-LLM answer over RAG chunks, give the
+        # question to the answer engine:
+        #   1. Classify question type (definitional / penalty / ...).
+        #   2. Select the 2-5 chunks that ACTUALLY answer the question.
+        #   3. Compose a CITED structured answer.
+        #   4. Verify grounding.
+        # On success → stream the engine's output.
+        # On any failure → fall through to legacy raw stream path.
+        # ═══════════════════════════════════════════════════════════
         _answer_parts: list[str] = []
+        _engine_served = False
+        if sources and len(sources) >= 2:
+            try:
+                from core.legal_answer_engine import compose_reasoned_answer
+                _engine_result = await compose_reasoned_answer(
+                    query=query,
+                    history=history,
+                    retrieved_chunks=sources,
+                    query_domain=query_domain,
+                )
+                if (
+                    _engine_result.used_engine
+                    and _engine_result.answer_text
+                    and len(_engine_result.answer_text) >= 200
+                ):
+                    log.info(
+                        "answer_engine served Q&A (type=%s, sources=%d, "
+                        "len=%d, grounded=%s)",
+                        _engine_result.classification.question_type,
+                        len(_engine_result.selected_sources),
+                        len(_engine_result.answer_text),
+                        _engine_result.verification.passed,
+                    )
+                    # Stream engine's text in chunks (~80 chars each)
+                    engine_text = _engine_result.answer_text
+                    _answer_parts.append(engine_text)
+                    step = 80
+                    for i in range(0, len(engine_text), step):
+                        piece = engine_text[i:i + step]
+                        yield _sse({
+                            "type": "chunk",
+                            "content": piece,
+                            "text": piece,
+                            "authoritative_path": "runtime_v2",
+                            "runtime_authority": "runtime_v2",
+                        })
+                    _engine_served = True
+                else:
+                    log.info(
+                        "answer_engine: fallback to raw stream — %s",
+                        _engine_result.failure_reason or "low confidence",
+                    )
+            except Exception as _ae_err:
+                log.warning(
+                    "answer_engine error → raw stream fallback: %s",
+                    _ae_err,
+                )
+
+        # ── Stream + capture full answer for Answer Memory (fallback) ──
         try:
-            async for piece in _llm.stream_openai(
-                system, messages, max_tokens=_max_tok,
-            ):
-                if piece:
-                    _answer_parts.append(piece)
-                    yield _sse({
-                        "type": "chunk", "content": piece, "text": piece,
-                        "authoritative_path": "runtime_v2",
-                        "runtime_authority": "runtime_v2",
-                    })
+            if not _engine_served:
+                async for piece in _llm.stream_openai(
+                    system, messages, max_tokens=_max_tok,
+                ):
+                    if piece:
+                        _answer_parts.append(piece)
+                        yield _sse({
+                            "type": "chunk", "content": piece, "text": piece,
+                            "authoritative_path": "runtime_v2",
+                            "runtime_authority": "runtime_v2",
+                        })
         except Exception as e:
             log.exception("general stream failed")
             err = f"تعذّر معالجة السؤال عبر النموذج ({type(e).__name__})."
@@ -2380,11 +2441,15 @@ def _wrap_with_state_save(
 
     original_iterator = original.body_iterator
 
+    log.info("session_state: wrapper INSTALLED for sid=%s", state.session_id[:16])
+
     async def _wrapped_body():
         accumulated = ""
         final_route = ""
+        frame_count = 0
         try:
             async for chunk in original_iterator:
+                frame_count += 1
                 # Parse SSE frames within this chunk to accumulate
                 # assistant text + capture final route.
                 try:
@@ -2415,14 +2480,26 @@ def _wrap_with_state_save(
         finally:
             # Always save — even on exception mid-stream — so we don't
             # lose the user turn that was already appended upstream.
+            log.info(
+                "session_state: wrapper FINALLY fired sid=%s frames=%d "
+                "accumulated_len=%d route=%s",
+                state.session_id[:16], frame_count,
+                len(accumulated), final_route,
+            )
             try:
                 if accumulated:
                     state.append_turn("assistant", accumulated)
                 if final_route:
                     state.transition_by_route(final_route)
-                await _save_state(state)
+                    log.info(
+                        "session_state: transitioned to phase=%s",
+                        state.phase.value,
+                    )
+                saved = await _save_state(state)
+                log.info("session_state: saved=%s sid=%s phase=%s",
+                         saved, state.session_id[:16], state.phase.value)
             except Exception as _e:
-                log.debug("session_state: post-stream save failed: %s", _e)
+                log.warning("session_state: post-stream save failed: %s", _e)
 
     return StreamingResponse(
         _wrapped_body(),
@@ -2509,6 +2586,20 @@ async def query_stream(req: QueryRequest, request: Request = None):
             # Append current user turn to state BEFORE any routing.
             if _session_state is not None:
                 _session_state.append_turn("user", q)
+                # ── CP7 eager save — prevent race condition ──
+                # The stream wrapper's `finally` block saves state AFTER
+                # the response finishes streaming to the client. In fast
+                # UIs, the next request can arrive BEFORE that save lands,
+                # loading stale state (missing the turn just appended in
+                # memory). Result: pattern-match gates see only old
+                # history, memo continuation breaks.
+                # Fix: save the user turn + predicted phase IMMEDIATELY,
+                # so the next request sees it in Redis. Wrapper's finally
+                # still corrects with actual route at stream end.
+                try:
+                    await _save_state(_session_state)
+                except Exception as _sv_err:
+                    log.debug("session_state eager save failed: %s", _sv_err)
         except Exception as _e:
             log.debug("session_state load failed: %s", _e)
             _session_state = None
@@ -2699,6 +2790,15 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 )
 
     if _force_memo:
+        # CP7 eager phase hint — predict memo-pending. The wrapper
+        # will correct to MEMO_DRAFTING if handle_memo_smart actually
+        # composed a memo (vs asking for details).
+        if _session_state is not None and _SESSION_STATE_AVAILABLE:
+            try:
+                _session_state.phase = _SessionPhase.AWAITING_MEMO_DETAILS
+                await _save_state(_session_state)
+            except Exception:
+                pass
         return _wrap_with_state_save(
             await handle_memo_smart(q, sid, req.history or []),
             _session_state,

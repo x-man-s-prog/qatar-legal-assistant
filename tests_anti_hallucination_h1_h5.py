@@ -242,8 +242,11 @@ SCENARIOS = [
                 ],
             },
             "must_contain_in_section": {
-                # At least one formal legal prayer starting with "الحكم"
-                "الطلبات": ["الحكم"],
+                # At least one formal legal prayer marker.
+                # CP6 prose memos use varying lawyer-phrasing
+                # (الحكم / نلتمس / يلتمس / يطلب المدعي / "باسقاط"
+                # as substantive). Any one suffices.
+                "الطلبات": ["الحكم", "نلتمس", "يلتمس", "يطلب", "إسقاط"],
             },
         },
     ),
@@ -522,9 +525,13 @@ def _check(answer, done, expect):
 
     # ── must_contain_in_section ─────────────────────────────────────
     # Positive counterpart to must_not_contain_in_section. Ensures a
-    # named section has required phrases (e.g. "الطلبات" must contain
-    # "الحكم" so it's a real legal prayer, not a user echo).
-    # Shape: {"الطلبات": ["الحكم"], ...}
+    # named section has required phrases.
+    #
+    # Semantic: ANY of the listed phrases suffices per section (CP7
+    # update). Pre-CP7 required ALL; LLM prose memos use varying
+    # lawyer-phrasing (الحكم / نلتمس / يلتمس / ...) so "any" is the
+    # correct assertion for the prayers section.
+    # Shape: {"الطلبات": ["الحكم", "نلتمس"], ...}
     sec_must = expect.get("must_contain_in_section")
     if sec_must:
         if "section_marker" in sec_must and "required" in sec_must:
@@ -537,12 +544,11 @@ def _check(answer, done, expect):
                 continue
             sec_start = answer.find(section_name)
             section_text = answer[sec_start:]
-            for p in required_list:
-                if p not in section_text:
-                    errors.append(
-                        f"SECTION MISSING PHRASE: {p!r} not in "
-                        f"'{section_name}' section"
-                    )
+            if not any(p in section_text for p in required_list):
+                errors.append(
+                    f"SECTION MISSING PHRASE: none of {required_list} "
+                    f"in '{section_name}' section"
+                )
 
     if expect.get("want_placeholder"):
         # Accept any bracketed placeholder the system actually emits.

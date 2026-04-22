@@ -1037,3 +1037,151 @@ with guardrails.
   the engine is domain-agnostic, which may produce generic
   reasoning for specialized domains.
 
+## 17. Session State Race + Answer Reasoning Layer (CP7)
+
+### The Silent Failure
+CP5 built the state machine. CP6 added the reasoning engine. Yet a
+live production transcript still showed T3 misrouted to general and
+T4 falling into the generic_skeleton template. Logs showed state
+was being saved — just not in time.
+
+### Root-Cause Diagnosis — Race Condition on State Save
+Diagnostic probe with consistent session_id revealed:
+  • T1 saved state correctly.
+  • T2 (force_memo → memo_ask_details) — the wrapper FINALLY block
+    fired AFTER the next request arrived.
+  • T3 loaded state BEFORE T2's save landed → phase still IDLE
+    → state-based routing didn't fire → fell through to phase0.
+
+The stream wrapper's ``finally`` block is guaranteed to run but
+only when the async generator is fully consumed. FastAPI/Uvicorn
+consumes the stream as it sends bytes to the client. If the
+client is fast (desktop UI on localhost) and the next request
+arrives within ~100ms of the previous response's last chunk,
+the next request can load state before the wrapper finalizes.
+
+Root fix: **eager save**. Persist state to Redis IMMEDIATELY
+after appending the user turn + making route decisions, not
+only in the wrapper's finally. The wrapper still saves at the
+end (capturing accumulated assistant text + actual route), but
+the next request already sees the user turn + predicted phase.
+
+Integration in query_router.py:
+  1. After ``_session_state.append_turn("user", q)`` — eager
+     ``await _save_state(_session_state)``.
+  2. Inside ``force_memo`` block — set phase to
+     ``AWAITING_MEMO_DETAILS`` + save again (best-guess).
+
+The wrapper still fires and corrects phase based on actual emitted
+route. Worst case: phase is "stale for ~100ms" between eager save
+and wrapper finalize. No longer wrong for seconds.
+
+### The Answer Path Had No Reasoning
+T1 "ما هي عقوبات المرور" + T6 "اذكر أسانيد أكثر" — both got vague
+deflections ("يُفضل الاطلاع على القانون" / "استشر محامي"). CP6 added
+reasoning to the MEMO path but ``handle_general`` (every Q&A turn)
+still streamed raw LLM output over RAG chunks with no intelligent
+selection or citation enforcement.
+
+### Root Fix — Answer Engine
+``core/legal_answer_engine.py`` (~450 LOC, NEW) — symmetric to the
+memo reasoning engine, adapted for Q&A:
+
+Stage 1 — CLASSIFY QUESTION  
+  definitional / procedure / penalty / analysis / general.
+
+Stage 2 — SELECT SOURCES  
+  From retrieved RAG chunks, keep 2-5 that ACTUALLY answer the
+  question. Skipped when retrieval is already narrow (≤4 chunks)
+  to avoid over-filtering.
+
+Stage 3 — COMPOSE ANSWER  
+  LLM writes CITED structured answer with mandatory sections:
+    • **الإجابة المباشرة** (direct answer — 1-2 lines)
+    • **السند القانوني** (legal basis with article citations)
+    • **تفصيل عملي** (practical elaboration)
+    • **توصية ختامية** (optional advisory)
+  Strict prompt forbids: vague deflection, "just go read the
+  law yourself", citing articles not in the selected set.
+
+Stage 4 — VERIFY  
+  Programmatic regex — every article number cited must be in
+  the selected source set.
+
+Integration in ``handle_general``: before streaming raw LLM output
+from ``_llm.stream_openai``, call ``compose_reasoned_answer``. On
+success, stream its output in chunks. On failure, fall through to
+the legacy raw stream path. Backward compatible.
+
+### Observable Impact
+
+T1 "ما هي عقوبات المرور" — Before CP7:
+  "العقوبات تشمل الغرامات المالية... يُفضل الاطلاع على قانون
+  المرور." (no articles, no numbers, pure deflection)
+
+T1 — After CP7 (engine-served):
+  "**الإجابة المباشرة:** عقوبات المرور في قطر تشمل الغرامات
+  المالية، السجن، وسحب رخصة القيادة...
+  **السند القانوني:** [...]
+  **تفصيل عملي:** [...]
+  **توصية ختامية:** [...]"
+  (structured, with sections, citations when DB has material)
+
+T3 "1- احمد 4 سنوات 2- سوء سلوكها 3- تاريخ الطلاق" — Before CP7:
+  route=general, LLM misreads Article 183(2) text about "الحاضنة
+  الجديدة" and applies it incorrectly.
+
+T3 — After CP7:
+  route=memo, 1415 chars prose narrative: "يتقدم مقدم المذكرة
+  [يُدرج اسم المدعي] بدعوى إسقاط الحضانة وضم المحضون ضد طليقته
+  [يُدرج اسم المدعى عليها]، وذلك بناءً على سوء سلوكها الذي يهدد
+  مصلحة المحضون. حيث إن المدعي هو والد المحضون أحمد، الذي يبلغ
+  من العمر أربع سنوات، وقد تم الطلاق بين المدعي والمدعى عليها
+  بتاريخ 01/01/2023..."
+
+### Tests + Engine Assertion Semantics
+``must_contain_in_section`` updated to ANY-semantics (prose
+memos use varying lawyer-phrasing — الحكم / نلتمس / يلتمس /
+إسقاط — any one in the Prayers section is valid). Pre-CP7 was
+ALL-semantics, which made prose tests brittle.
+
+### Regression State After CP7
+  11/11  anti-hallucination
+  14/14  context-prop
+  17/17  cp5 production scenario
+   8/8   c1-c8 memo continuity
+ 132/132 pytest unit + case_memory E2E
+  --------
+ 182/182 total passing
+
+### Protocol Update — Two Principles
+
+1. **Eager save principle.** Any state that affects routing MUST
+   be saved to Redis before the handler runs, not after the
+   stream completes. Stream completion is an asynchronous event
+   whose timing depends on client consumption speed. Routing
+   decisions must not depend on it.
+
+2. **Reasoning parity principle.** Every answer path (memo,
+   question, followup, advisory) MUST go through a reasoning
+   engine with the same 5-stage pattern: classify → select →
+   compose → verify → fallback. Raw LLM streaming over RAG
+   chunks is a LEGACY PATH — kept as fallback, never the
+   primary.
+
+### Scheduled Follow-up
+
+- CP8: unify ``legal_reasoning_engine`` (memo) and
+  ``legal_answer_engine`` (Q&A) under a common base class —
+  both share classify/select/compose/verify/fallback patterns.
+- CP8: extend reasoning to ``handle_continuation`` — follow-up
+  questions currently use raw LLM stream over history.
+- CP8: expand retrieval quality — CP7 showed the engine is
+  only as good as the chunks it reasons over. T1 (traffic)
+  still degraded-looking because the DB chunks for traffic
+  law are sparse. A domain-aware retrieval expander (query
+  rewrite + synonym expansion) would help.
+- Future: move all reasoning cache TTLs to a single config so
+  memo (1h), answer (30m), and topic (1h) can be tuned
+  together without code changes.
+
