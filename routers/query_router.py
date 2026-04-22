@@ -1840,17 +1840,32 @@ async def handle_continuation(
 # ──────────────────────────────────────────────────────────────────
 
 _MEMO_TOPIC_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("حضانة",    ("حضانة", "محضون", "طليقتي", "مطلقتي", "ولدي", "بنتي", "أطفال")),
+    # FINDING #21: new phrasings are merged into EXISTING topic keys
+    # so every topic has a valid _MEMO_GAPS entry. Adding a new
+    # top-level topic requires a corresponding _MEMO_GAPS entry below.
+    ("حضانة",    ("حضانة", "حضانه", "محضون", "طليقتي", "مطلقتي",
+                  "ولدي", "بنتي", "أطفال",
+                  "إسقاط حضانة", "اسقاط حضانه",
+                  "سقوط حضانه", "سقوط الحضانة",
+                  "ضم الحضانة", "ضم حضانة")),
     ("مخدرات",   ("مخدرات", "حشيش", "كوكايين", "تعاطي", "جوهر مخدر")),
-    ("فصل",      ("فصل", "فصلوني", "طردوني", "صاحب العمل", "إنهاء خدمات")),
+    ("فصل",      ("فصل", "فصلوني", "طردوني", "صاحب العمل", "إنهاء خدمات",
+                  "فصل تعسفي", "الفصل التعسفي", "فصلني تعسفياً",
+                  "مستحقات عمالية", "مستحقات الموظف",
+                  "مستحقات نهاية الخدمة", "نهاية خدمة",
+                  "إجازة مرضية", "إصابة عمل", "بدل إنذار")),
     ("تشهير",    ("سب", "قذف", "تشهير", "تويتر", "سبني", "شهّر")),
     ("ضرب",      ("ضرب", "ضربني", "اعتدى", "كسر", "إيذاء", "ضربه")),
     ("شيك",      ("شيك", "رصيد", "شيك ضمان", "شيك بلا رصيد")),
-    ("إيجار",    ("إيجار", "مستأجر", "إخلاء", "شقة", "ماجر", "مأجر")),
+    ("إيجار",    ("إيجار", "مستأجر", "إخلاء", "شقة", "ماجر", "مأجر",
+                  "فسخ عقد إيجار", "فسخ إيجار",
+                  "رفع الإيجار", "صيانة متفق عليها")),
     ("ابتزاز",   ("ابتزاز", "يهددني", "تهديد", "هددني")),
-    ("احتيال",   ("احتيال", "نصب", "خيانة أمانة", "حوّل", "اختلس", "اختلاس")),
+    ("احتيال",   ("احتيال", "نصب", "خيانة أمانة", "حوّل", "اختلس", "اختلاس",
+                  "شركة وهمية", "اكتشف الاحتيال")),
     ("تزوير",    ("تزوير", "زوّر", "توقيع مزور", "محرر مزور")),
-    ("طلاق",     ("طلاق للضرر", "عنف زوجي", "طلاق", "يضربني الزوج")),
+    ("طلاق",     ("طلاق للضرر", "عنف زوجي", "طلاق", "يضربني الزوج",
+                  "خلع", "دعوى خلع", "مخالعة", "طلب خلع")),
     ("نفقة",     ("نفقة", "نفقه", "النفقة", "النفقه",
                   "نفقة زوجية", "نفقه زوجيه",
                   "نفقة أطفال", "نفقه اطفال",
@@ -1858,6 +1873,21 @@ _MEMO_TOPIC_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
                   "امتنع عن الانفاق", "ما ينفق", "لا ينفق",
                   "طليقي ما ينفق", "زوجي ما ينفق",
                   "دعوى نفقه", "دعوة نفقه")),
+    # NEW top-level topics — each requires a matching _MEMO_GAPS entry
+    # registered below so the handler's min_signals gate still works.
+    ("مرور",     ("حادث مروري", "حادث مرور", "حادث سير", "حادث سيارة",
+                  "مخالفة مرورية", "سحب رخصة", "رخصة القيادة",
+                  "تعويض حادث", "تأثير الكحول")),
+    ("تجاري",    ("دين تجاري", "مطالبة تجارية", "عقد توريد",
+                  "شريك تجاري", "أموال الشركة", "الاستيلاء على أموال")),
+    ("ميراث",    ("ميراث", "تركة", "الورثة", "الإرث", "أنصبة الورثة")),
+    ("سرقة",     ("سرقة", "سرق", "سرقوا", "السرقة المشدّدة", "سرق من الخزينة")),
+    ("رشوة",     ("رشوة", "رشاوى", "رشى")),
+    ("رد اعتبار", ("رد اعتبار", "رد الاعتبار", "ردّ اعتبار")),
+    ("استئناف",  ("استئناف", "طعن بالاستئناف", "الطعن بالاستئناف",
+                  "استئناف حكم")),
+    ("عيب خفي",  ("عيب خفي", "عيب خفى", "عيوب خفية", "عيب في السيارة",
+                  "عيب في البضاعة")),
 )
 
 _MEMO_GAPS = {
@@ -1962,6 +1992,80 @@ _MEMO_GAPS = {
         ],
         "min_signals": 2,
     },
+    # FINDING #21 — new topic gaps
+    "مرور": {
+        "qs": [
+            "تاريخ ومكان الحادث؟",
+            "هل توجد إصابات بشرية؟ ما درجتها؟",
+            "هل تم استخراج محضر شرطة/تقرير مرور؟",
+            "هل السائق الآخر تحت تأثير مسكر أو مخدر؟ وكيف تم إثبات ذلك؟",
+            "قيمة الأضرار المادية التقديرية؟",
+        ],
+        "min_signals": 1,
+    },
+    "تجاري": {
+        "qs": [
+            "طبيعة العلاقة التجارية (دين / عقد توريد / شراكة)؟",
+            "قيمة المبلغ محل النزاع وعملته؟",
+            "هل يوجد عقد مكتوب أو فواتير أو تحويلات بنكية؟",
+            "تاريخ نشوء الحق ومدة التأخر في السداد؟",
+        ],
+        "min_signals": 1,
+    },
+    "ميراث": {
+        "qs": [
+            "تاريخ وفاة المورِّث وجنسيته؟",
+            "من الورثة وصفاتهم (زوج/زوجة/أبناء/والدين)؟",
+            "طبيعة التركة (عقارات/نقود/أسهم/ديون)؟",
+            "هل هناك وصية أو هبة قبل الوفاة؟",
+        ],
+        "min_signals": 1,
+    },
+    "سرقة": {
+        "qs": [
+            "قيمة المسروق وطبيعته؟",
+            "ظروف السرقة (كسر/تسلق/ليل/نهار)؟",
+            "هل اعترف المتهم وهل له سوابق جنائية؟",
+            "هل توجد أدلة مادية أو شهود؟",
+        ],
+        "min_signals": 1,
+    },
+    "رشوة": {
+        "qs": [
+            "القطاع (عام/خاص) وصفة المرتشي؟",
+            "قيمة المبلغ وطبيعة المقابل المطلوب؟",
+            "هل توجد تسجيلات أو شهود أو مستندات؟",
+            "هل الجهة تم إبلاغها ومتى؟",
+        ],
+        "min_signals": 1,
+    },
+    "رد اعتبار": {
+        "qs": [
+            "نوع العقوبة التي صدرت ومدتها؟",
+            "تاريخ انتهاء تنفيذ العقوبة؟",
+            "هل انقضت المدة القانونية لرد الاعتبار (3/5/7 سنوات حسب النوع)؟",
+            "هل توجد جرائم لاحقة بعد الحكم الأول؟",
+        ],
+        "min_signals": 1,
+    },
+    "استئناف": {
+        "qs": [
+            "طبيعة الدعوى الأصلية (عمالية/مدنية/جزائية)؟",
+            "تاريخ الحكم الابتدائي وهل تم الإبلاغ رسمياً؟",
+            "الأسباب المُراد الطعن بها (خطأ قانون/قصور تسبيب/إخلال بحق الدفاع)؟",
+            "هل لديك نسخة من الحكم المطعون فيه؟",
+        ],
+        "min_signals": 1,
+    },
+    "عيب خفي": {
+        "qs": [
+            "طبيعة المنتج (سيارة/بضاعة/عقار) وقيمته؟",
+            "متى ظهر العيب ومتى اكتُشف؟",
+            "هل توجد شهادة فنية تثبت أن العيب خفي وليس مرئياً وقت البيع؟",
+            "هل المشتري أخطر البائع بالعيب خلال المدة القانونية؟",
+        ],
+        "min_signals": 1,
+    },
 }
 
 
@@ -2059,6 +2163,131 @@ def _is_force_memo_request(query: str) -> bool:
         _has_memo_verb(q)
         and _has_memo_noun(q)
         and _has_memo_topic(q)
+    )
+
+
+def _is_fresh_memo_directive(query: str) -> bool:
+    """True iff the query unambiguously requests a NEW memo.
+
+    FINDING #21: the sufficient pair for a "fresh draft directive" is
+    (memo VERB) AND (memo NOUN). No topic-keyword requirement — the
+    memo handler can ask for topic if missing. Any fresh directive
+    MUST trigger a full state wipe (session phase, topic-memory, and
+    history passed to the handler) so the prior memo's topic and
+    facts cannot bleed into the new memo.
+
+    Examples (all True):
+      - "اكتب مذكرة فصل تعسفي — ..."
+      - "صغ عريضة حضانة"
+      - "جهز لي لائحة دعوى تجارية"
+      - "اكتب مذكرة" (topic TBD — handler asks)
+    Examples (False):
+      - "ما هي عقوبة السرقة؟"               (no verb, no noun)
+      - "موكلي سرق 30 ألف — ما موقفه؟"      (analysis, not draft)
+      - "اكتب لي ملخص"                      (noun != مذكرة/عريضة/لائحة)
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    return _has_memo_verb(q) and _has_memo_noun(q)
+
+
+# ═════════════════════════════════════════════════════════════════
+# Off-topic / non-legal guard (FINDING #21)
+# ─────────────────────────────────────────────────────────────────
+# The system is a Qatari LEGAL assistant. Queries asking for images,
+# recipes, weather, subjective small-talk, or pure punctuation must
+# be rejected gracefully — not pushed through the legal pipeline
+# with stale history facts appended.
+#
+# Two categories:
+#   1. OFF_TOPIC_PATTERNS — explicit non-legal requests (image,
+#      recipe, weather, time, translate, song, ...)
+#   2. PUNCTUATION_ONLY   — a dot, dash, multiple spaces, single
+#      emoji, etc. Means the user accidentally sent, or tested.
+# ═════════════════════════════════════════════════════════════════
+
+_OFF_TOPIC_PATTERNS: tuple[str, ...] = (
+    # Image / drawing
+    "ارسم", "ارسملي", "ارسم لي", "صورة عن", "صوره عن",
+    "generate image", "draw",
+    # Recipe / cooking
+    "وصفة", "وصفه طبخ", "وصفة طبخ", "طبخه", "اطبخ",
+    "recipe",
+    # Weather
+    "ما هو الطقس", "شو الطقس", "كيف الطقس", "الطقس اليوم",
+    "weather",
+    # Time / date (not legal)
+    "الساعة كم", "كم الساعة", "ما الوقت",
+    # Translation
+    "ترجم لي", "translate",
+    # Songs / poems / jokes / games
+    "غني", "اكتب اغنية", "اكتب أغنية", "اكتب قصيدة",
+    "قصة", "نكتة", "لعبة",
+    # Subjective opinion on non-legal matters
+    "ما رأيك في السياسة",
+    # Personal info / non-legal help
+    "كيف أطبخ", "كيف اطبخ",
+)
+
+
+def _is_off_topic_query(query: str) -> bool:
+    """True when the query is clearly off-topic (non-legal)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    return any(p in q for p in _OFF_TOPIC_PATTERNS)
+
+
+def _is_punctuation_or_noise(query: str) -> bool:
+    """True when the query is just punctuation, whitespace, or a
+    single character — meaningless input."""
+    q = (query or "").strip()
+    if not q:
+        return True
+    # Strip common punctuation + whitespace
+    stripped = re.sub(r"[\s\.\-_\,\;\:\!\?؟،؛\u0600-\u060F\u061B\u061F]+", "", q)
+    # If nothing meaningful is left, or only 1–2 characters, treat as noise.
+    return len(stripped) <= 2
+
+
+def _build_off_topic_response(query: str) -> str:
+    """Polite rejection for non-legal queries, redirecting to legal."""
+    q = (query or "").strip().lower()
+    if any(t in q for t in ("ارسم", "صورة", "draw", "image")):
+        return (
+            "لا أقدر على توليد صور — أنا **ميزان**، مساعد قانوني قطري نصّي. "
+            "أقدر أساعدك في أي موضوع قانوني (استشارات، مذكرات، عقود، "
+            "تحليل قضايا). اطرح سؤالك القانوني وسأجيبك بدقة."
+        )
+    if any(t in q for t in ("وصفة", "طبخ", "recipe")):
+        return (
+            "أنا مساعد قانوني قطري، لا خبير طبخ 🙂 — "
+            "اسألني عن أي موضوع قانوني وسأساعدك."
+        )
+    if any(t in q for t in ("الطقس", "weather")):
+        return (
+            "لا أقدم معلومات الطقس — تخصّصي قانوني فقط. "
+            "هل عندك استشارة قانونية تحب نناقشها؟"
+        )
+    if any(t in q for t in ("ترجم", "translate")):
+        return (
+            "لا أقدم ترجمة عامة — لكن أقدر أشرح لك أي نص قانوني قطري "
+            "وأوضّح مصطلحاته. شارك النص أو السؤال القانوني."
+        )
+    # Generic rejection
+    return (
+        "أنا **ميزان** — مساعد قانوني قطري متخصّص. "
+        "هذا السؤال خارج نطاق تخصّصي. اطرح أي موضوع قانوني "
+        "(استشارة، مذكرة، عقد، حساب مستحقات) وسأساعدك بدقة."
+    )
+
+
+def _build_noise_response() -> str:
+    """Ask the user to send a real legal question."""
+    return (
+        "لم أستلم سؤالاً واضحاً. اطرح موضوعك القانوني بجملة كاملة "
+        "(مثال: «ما عقوبة الشيك بدون رصيد؟» أو «اكتب مذكرة حضانة»)."
     )
 
 
@@ -2774,6 +3003,147 @@ async def query_stream(req: QueryRequest, request: Request = None):
         req.history = _server_history
 
     # ═════════════════════════════════════════════════════════════════
+    # FINDING #21 — PRE-CLASSIFIER HARD GATES
+    # ─────────────────────────────────────────────────────────────────
+    # Three definitive surface signals are resolved BEFORE the intent
+    # classifier runs, because each one is an authoritative verdict
+    # that no LLM judgment can override:
+    #
+    #   (1) PUNCTUATION/NOISE  — empty-ish input. Ask for a real question.
+    #   (2) OFF-TOPIC           — image/recipe/weather/song/translate/...
+    #                             Polite rejection redirecting to legal.
+    #   (3) FRESH MEMO DIRECTIVE — query has (memo VERB + memo NOUN),
+    #                              regardless of prior topic or phase.
+    #                              This MUST wipe all prior memo state
+    #                              (phase + topic + session_topic_memory)
+    #                              and run the memo handler with EMPTY
+    #                              history so the prior topic/facts
+    #                              cannot leak into the new memo.
+    #
+    # Without (3), a user asking "اكتب مذكرة فصل تعسفي" right after a
+    # custody memo was drafted gets the CUSTODY memo repeated — the
+    # session topic memory holds حضانة and the memo handler sweeps
+    # history to "recover" facts, producing a hybrid nonsense memo.
+    # ═════════════════════════════════════════════════════════════════
+
+    # (1) Punctuation-only / empty-ish input
+    if _is_punctuation_or_noise(q):
+        async def _noise_gen():
+            async for frame in _stream_text_direct(
+                _build_noise_response(), "clarify", 95, chunk_size=60,
+            ):
+                yield frame
+        return _wrap_with_state_save(
+            StreamingResponse(_noise_gen(), media_type="text/event-stream"),
+            _session_state,
+        )
+
+    # (2) Off-topic non-legal request
+    if _is_off_topic_query(q):
+        log.info("off_topic: rejected non-legal query")
+        async def _offtopic_gen():
+            async for frame in _stream_text_direct(
+                _build_off_topic_response(q), "off_topic", 95, chunk_size=60,
+            ):
+                yield frame
+        return _wrap_with_state_save(
+            StreamingResponse(_offtopic_gen(), media_type="text/event-stream"),
+            _session_state,
+        )
+
+    # (3) Fresh memo directive — hard-reset + empty history
+    #
+    # FINDING #21 constraint: fresh-memo MUST NOT fire when the session
+    # is in ANY memo-related phase (awaiting OR drafting). In such
+    # phases, a query like "طيب اكتب المذكرة" / "لماذا لم تكتب" is
+    # a CONTINUATION / REFINEMENT of the current memo, not a request
+    # for a brand-new one. Firing hard-reset there would wipe the
+    # pending topic/facts and cause the handler to re-ask the user.
+    #
+    # Fresh-memo only fires when phase == IDLE — there is no active
+    # memo session. In that case verb+noun is unambiguously a new
+    # draft request.
+    _session_in_memo_mode = bool(
+        _session_state is not None
+        and _SESSION_STATE_AVAILABLE
+        and _session_state.phase in (
+            _SessionPhase.AWAITING_MEMO_DETAILS,
+            _SessionPhase.AWAITING_MEMO_TOPIC,
+            _SessionPhase.MEMO_DRAFTING,
+        )
+    )
+    # Kept for backward compat — some downstream blocks use the
+    # "wait" phrasing for the UNCLEAR soft-block rule, where only
+    # AWAITING_* counts (MEMO_DRAFTING doesn't suggest continuation).
+    _session_in_memo_wait = bool(
+        _session_state is not None
+        and _SESSION_STATE_AVAILABLE
+        and _session_state.phase in (
+            _SessionPhase.AWAITING_MEMO_DETAILS,
+            _SessionPhase.AWAITING_MEMO_TOPIC,
+        )
+    )
+    # Fresh-memo gate fires when:
+    #   (a) phase is IDLE, OR
+    #   (b) phase is active memo mode BUT the query carries an EXPLICIT
+    #       topic keyword DIFFERENT from the stored session topic
+    #       (user is pivoting to a new memo subject).
+    # This lets "طيب اكتب المذكرة" and "لماذا لم تكتب" (no topic) flow
+    # through as continuations, while "اكتب مذكرة فصل تعسفي" mid-custody
+    # correctly triggers a hard-reset to the new topic.
+    _fire_fresh_memo = False
+    if _is_fresh_memo_directive(q):
+        if not _session_in_memo_mode:
+            _fire_fresh_memo = True
+        else:
+            _q_topic_now = _detect_memo_topic(q)
+            if _q_topic_now != "عام":
+                _stored_topic_val = None
+                try:
+                    from core.session_topic_memory import (
+                        get_session_topic_sync as _get_topic_sync,
+                    )
+                    _stored_topic_val = _get_topic_sync(sid)
+                except Exception:
+                    pass
+                if not _stored_topic_val or _stored_topic_val != _q_topic_now:
+                    _fire_fresh_memo = True
+                    log.info(
+                        "fresh_memo_directive: topic pivot %s → %s mid-memo",
+                        _stored_topic_val or "none", _q_topic_now,
+                    )
+    if _fire_fresh_memo:
+        log.info(
+            "fresh_memo_directive: verb+noun detected (phase=%s) → "
+            "hard-reset + empty history",
+            _session_state.phase.value if _session_state else "idle",
+        )
+        if _session_state is not None:
+            _session_state.reset_memo_state_hard()
+            try:
+                await _save_state(_session_state)
+            except Exception:
+                pass
+        try:
+            from core.session_topic_memory import (
+                clear_session_topic_sync as _clear_topic_sync,
+            )
+            _clear_topic_sync(sid)
+        except Exception as _ct_err:
+            log.debug("session_topic clear failed: %s", _ct_err)
+        # Pre-set phase so wrapper records correct transition.
+        if _session_state is not None and _SESSION_STATE_AVAILABLE:
+            _session_state.phase = _SessionPhase.AWAITING_MEMO_DETAILS
+            try:
+                await _save_state(_session_state)
+            except Exception:
+                pass
+        return _wrap_with_state_save(
+            await handle_memo_smart(q, sid, []),   # EMPTY history — no leak
+            _session_state,
+        )
+
+    # ═════════════════════════════════════════════════════════════════
     # CP9 — LLM-BASED TURN INTENT CLASSIFIER
     # ─────────────────────────────────────────────────────────────────
     # Replaces the narrow prefix-match pivot list with LLM-judged intent.
@@ -2991,15 +3361,39 @@ async def query_stream(req: QueryRequest, request: Request = None):
     # "قبل ما أكتب مذكرة". The classifier is authoritative for intent;
     # the gates are a fallback for when the classifier is silent.
     # ═════════════════════════════════════════════════════════════════
+    # FINDING #21: UNCLEAR is a SOFT non-memo verdict. It blocks the
+    # gates only when the session is NOT already in a memo-wait phase.
+    # Rationale:
+    #   • AWAITING_MEMO_DETAILS/TOPIC + UNCLEAR most often means the
+    #     user is providing details in a form the LLM can't confidently
+    #     classify (dialect, typos, shorthand). We must let the gates
+    #     fire so the memo handler can process them.
+    #   • IDLE / MEMO_DRAFTING + UNCLEAR means the classifier couldn't
+    #     decide AND there's no pending memo context. Safe default:
+    #     block memo gates → general pipeline handles it.
+    # The hard block intents unconditionally block memo gates — those
+    # verdicts are the classifier's confident non-memo decisions.
+    _hard_block_intents = (
+        "new_legal_question",
+        "meta_system_query",
+        "casual_social",
+        "complaint_feedback",
+        "clarification",
+        "command",
+    )
     _classifier_blocks_memo_gates = bool(
         _turn_intent is not None
-        and _turn_intent.intent.value in (
-            "new_legal_question",
-            "meta_system_query",
-            "casual_social",
-            "complaint_feedback",
-            "clarification",
-            "command",
+        and (
+            _turn_intent.intent.value in _hard_block_intents
+            or (
+                # UNCLEAR blocks gates ONLY when there's no active memo
+                # session at all (phase == IDLE). In any memo phase
+                # (AWAITING_* or MEMO_DRAFTING) an UNCLEAR turn is more
+                # likely a continuation / refinement, so we let the
+                # legacy gates decide.
+                _turn_intent.intent.value == "unclear"
+                and not _session_in_memo_mode
+            )
         )
     )
 
@@ -3062,7 +3456,31 @@ async def query_stream(req: QueryRequest, request: Request = None):
             "كيف ", "أين ", "متى ", "لماذا", "هل ",
             "كم المبلغ", "كم المدة", "كم مدة",
         )
-        if any(_q_lower_fresh.startswith(p) for p in _FRESH_Q_PREFIXES):
+        # FINDING #21: widen the override to catch analysis questions
+        # embedded mid-sentence. Queries like "موكلي سرق 30 ألف ريال —
+        # ما موقفه القانوني وما المتوقع من الحكم؟" don't START with a
+        # question word, so the strict startswith misses them, and the
+        # memo continuation gates drag them back into a memo loop.
+        # Mid-sentence detection: ANY of the analysis phrases appears,
+        # OR the query ends with a question mark.
+        _ANALYSIS_QUESTION_PHRASES = (
+            "ما موقفه", "ما موقفها", "ما موقفي", "ما موقف",
+            "ما حقوقه", "ما حقوقها", "ما حقوقي",
+            "ما خياراته", "ما خياراتها", "ما خياراتي",
+            "ما المتوقع", "ما الإجراء", "ما الإجراءات",
+            "ما الحكم", "هل يُجبر", "هل يجبر", "هل يحق",
+            "ما رأيك", "رأيك في",
+            "حللي موقف", "حلل موقف",
+            "قارن بين", "قارني بين",
+            "ما الفرق بين",
+        )
+        _q_tail = _q_lower_fresh[-3:]
+        _ends_with_q_mark = _q_tail.endswith("؟") or _q_tail.endswith("?")
+        if (
+            any(_q_lower_fresh.startswith(p) for p in _FRESH_Q_PREFIXES)
+            or any(p in _q_lower_fresh for p in _ANALYSIS_QUESTION_PHRASES)
+            or _ends_with_q_mark
+        ):
             _fresh_question = True
             log.info(
                 "memo_continuation: fresh-question override → skip all gates"

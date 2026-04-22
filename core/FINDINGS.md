@@ -1745,3 +1745,286 @@ gates downstream do not honour its verdict.**
   log (query, classification, actual-route-taken, user-rating)
   and review miscategorisations weekly.
 
+
+## 21. Memo State-Bleed, UNCLEAR Gate, and Off-Topic Guard (CP11)
+
+### The Sequential Memo Catastrophe
+
+A single-session transcript containing ~20 sequential user requests
+exposed a class of bugs worse than any seen before. Sample failures:
+
+  T11 → "اكتب مذكرة إسقاط حضانة ضد طليقتي — سالم 5 سنوات..."
+        ✓ correct custody memo produced.
+
+  T12 → "اكتب مذكرة فصل تعسفي — موكلي مهندس 8 سنوات..."
+        ✗ produced the T11 custody memo verbatim
+          (same "سالم"، "طليقته التي تزوجت من رجل أجنبي").
+
+  T16 → "مذكرة فسخ عقد إيجار — المؤجر رفع الإيجار 40%..."
+        ✗ fact section contained: شيك 45,000 + فصل مهندس +
+          نفقة طليقة + طلاق ضرب + إيجار — ALL prior memos'
+          facts concatenated.
+
+  T17 → "اكتب مذكرة تعويض عن حادث مروري..."
+        ✗ topic "منازعات الإيجار والإخلاء" (wrong).
+
+  T21 → "موكلي سرق 30 ألف — ما موقفه القانوني؟"
+        ✗ produced a theft memo (not an analysis).
+
+  T31 → "شركة رفضت تسليم مستحقات موظفها..."
+        ✗ produced a defamation memo (wrong topic entirely).
+
+  T35 → "ما هو الطقس اليوم في الدوحة؟"
+        ✗ got "تحليل أولي — شبهة مسألة تجارية / شركات"
+          with facts from prior turns mixed in.
+
+  T36–T38 (image / recipe / single dot) → same — polluted
+  analysis templates instead of polite rejections.
+
+### The Meta-Root-Cause (Round 6)
+
+CP10 fixed ``LEGAL_DRAFT_REQUEST`` → hard-reset when the intent
+classifier reached that verdict with high confidence. But the
+production reality showed **three distinct holes** downstream:
+
+  Hole 1 — **Memo state bleed on the fallback path**.
+  When the classifier returned ``UNCLEAR`` or ``LEGAL_DRAFT_REQUEST``
+  with confidence < 0.8, ``_force_memo_via_intent`` was False. The
+  request then fell through to ``_is_force_memo_request(q)`` which
+  routed to ``handle_memo_smart(q, sid, req.history)`` WITH the full
+  history. Inside the memo handler, ``_compute_memo_signals`` sweeps
+  every prior user message and accumulates signals; ``_detect_memo_topic``
+  falls back to the session_topic_memory; and the compose stage
+  receives all prior turns as "context". Result: the new memo is a
+  hybrid of every memo asked this session.
+
+  Hole 2 — **UNCLEAR intent falling through to memo gates**.
+  ``_classifier_blocks_memo_gates`` (CP10) blocked the gates only
+  when the classifier had a confident non-memo verdict. UNCLEAR —
+  the default when the classifier is uncertain — was NOT in the
+  list. Gates A/B/C then fired on history-blob heuristics and
+  force-routed analysis questions to the memo handler.
+
+  Hole 3 — **No off-topic guard**.
+  Non-legal queries (image, recipe, weather, single punctuation)
+  went through the normal classifier → fell through to general
+  pipeline → produced legal-template responses with stale-history
+  facts injected. The system is a Qatari legal assistant; queries
+  clearly outside that scope must be rejected at the door, not
+  forced through a legal analysis template.
+
+### Root Fixes — Four Surgical Changes
+
+**Fix 1 — Pre-classifier "fresh memo directive" gate**
+
+  New function ``_is_fresh_memo_directive(query)``:
+  ```python
+  return _has_memo_verb(q) AND _has_memo_noun(q)
+  ```
+  (Intentionally weaker than ``_is_force_memo_request`` — no topic
+  requirement — because "اكتب مذكرة" with no topic should still
+  trigger a fresh draft; the handler will ask for the topic.)
+
+  Router applies it BEFORE the intent classifier. When True:
+  • ``reset_memo_state_hard()`` on SessionState (phase+topic+facts).
+  • ``clear_session_topic_sync(sid)`` on the topic-memory Redis key.
+  • ``handle_memo_smart(q, sid, [])`` with EMPTY history.
+
+  This is authoritative: any "اكتب مذكرة" / "صغ عريضة" / "جهز لي
+  لائحة" always starts a new memo on a clean slate. No path
+  downstream can undo it.
+
+**Fix 2 — UNCLEAR soft-blocks memo gates (phase-aware)**
+
+  ``_classifier_blocks_memo_gates`` split into hard-block and
+  soft-block intents:
+  • Hard-block (always blocks gates): new_legal_question,
+    meta_system_query, casual_social, complaint_feedback,
+    clarification, command.
+  • Soft-block (UNCLEAR): blocks gates ONLY when phase is IDLE —
+    i.e. no active memo session. In any memo phase
+    (AWAITING_* / MEMO_DRAFTING), an UNCLEAR turn is more likely
+    a continuation or refinement, so we let the legacy gates fire
+    and the handler decide.
+
+  Rationale: when the classifier is genuinely uncertain AND
+  there's no memo context, force-memo would emit 1500+ chars of
+  stale-history content; general pipeline serves the user with a
+  real legal answer. When there IS memo context, UNCLEAR is
+  usually a continuation the classifier couldn't confidently
+  name, and the memo handler's own logic (topic recovery + signal
+  count + min_signals gate) is the correct arbiter.
+
+**Fix 2b — Fresh-memo-directive: phase + topic-pivot aware**
+
+  The gate fires in exactly two cases:
+    1. ``phase == IDLE`` — no active memo session; any verb+noun
+       is unambiguously a new draft.
+    2. ``phase in (AWAITING_*, MEMO_DRAFTING)`` BUT the query
+       carries an explicit TOPIC keyword DIFFERENT from the
+       stored session topic — user is pivoting to a new memo
+       subject. In that case we hard-reset as if IDLE.
+
+  Examples:
+  • "طيب اكتب المذكرة" / "لماذا لم تكتب" in MEMO_DRAFTING → no
+    topic → NOT fresh → continuation path.
+  • "اكتب مذكرة فصل تعسفي" after a custody memo (stored="حضانة",
+    q_topic_now="فصل") → topics differ → FRESH fires → hard
+    reset + empty history, producing a clean labor-fired memo.
+  • "اكتب مذكرة اسقاط حضانه" after a custody memo (both="حضانة")
+    → same topic → continuation path, existing facts preserved.
+
+**Fix 2c — Widened fresh-question override**
+
+  CP4's original ``_FRESH_Q_PREFIXES`` caught only queries that
+  *started* with a question word. Production users embed the
+  question mid-sentence: "موكلي سرق 30 ألف — ما موقفه القانوني؟".
+  The override was blind to this and Gates A/B/C dragged the
+  turn into a memo loop.
+
+  Widened detection in the router:
+  • existing prefix list (kept for backward compat),
+  • new ``_ANALYSIS_QUESTION_PHRASES`` matched anywhere:
+    "ما موقفه / ما حقوقه / ما خياراته / ما المتوقع /
+    ما الإجراء(ات) / ما الحكم / هل يُجبر / هل يحق /
+    حللي موقف / قارن بين / ما الفرق بين / ما رأيك / ...",
+  • any query ending with ``؟`` or ``?``.
+
+  When any of these match → ``_fresh_question = True`` →
+  _is_force_memo_request + Gates A/B/C/D all skipped. The turn
+  proceeds to phase0 → general pipeline.
+
+**Fix 3 — Off-topic / noise guards**
+
+  New helpers in ``routers/query_router.py``:
+  • ``_is_off_topic_query(q)`` — detects image/drawing/recipe/
+    weather/translate/song/game/subjective-politics queries.
+  • ``_is_punctuation_or_noise(q)`` — detects empty / single-char /
+    punctuation-only input.
+  • ``_build_off_topic_response(q)`` — polite topic-aware rejection.
+  • ``_build_noise_response()`` — asks for a real legal question.
+
+  Router applies these BEFORE the classifier, above fresh-memo
+  directive gate. Routes:
+  • noise → ``"clarify"`` with brief prompt.
+  • off-topic → ``"off_topic"`` with topic-specific redirect.
+
+**Fix 4 — Expanded ``_MEMO_TOPIC_MAP`` + matching ``_MEMO_GAPS``**
+
+  New top-level topics each paired with a matching ``_MEMO_GAPS``
+  entry (so the handler's min_signals gate still works):
+  مرور, تجاري, ميراث, سرقة, رشوة, رد اعتبار, استئناف, عيب خفي.
+
+  Existing topics gained new variant keywords merged in:
+  حضانة += {إسقاط حضانة, اسقاط حضانه, سقوط الحضانة, ضم الحضانة},
+  فصل += {فصل تعسفي, الفصل التعسفي, مستحقات عمالية, إجازة مرضية,
+         إصابة عمل, بدل إنذار},
+  طلاق += {خلع, دعوى خلع, مخالعة, طلب خلع},
+  إيجار += {فسخ عقد إيجار, رفع الإيجار, صيانة متفق عليها},
+  احتيال += {شركة وهمية, اكتشف الاحتيال}.
+
+  First-architectural-rule added: **every key in
+  ``_MEMO_TOPIC_MAP`` MUST have a matching key in ``_MEMO_GAPS``.**
+  Adding a topic to the MAP without a GAPS entry breaks
+  ``handle_memo_smart`` — the min_signals guard silently skips
+  and the handler composes on thin signals. This was a landmine
+  in the first CP11 deploy; now called out in the MAP's comment
+  header.
+
+### Architecture — Routing Authority Hierarchy (post-CP11)
+
+```
+1. HARD GATES (surface-only, pre-classifier):
+   • noise            → "clarify"
+   • off-topic        → "off_topic"
+   • fresh-memo       → memo handler (empty history, hard reset)
+
+2. INTENT CLASSIFIER (LLM + fast-path):
+   • meta             → _build_meta_response or degrade
+   • casual/complaint → _build_casual_response
+   • memo-continue    → memo handler
+   • legal-draft ≥0.8 → memo handler (hard reset if configured)
+   • new_legal_q      → general pipeline
+   • unclear          → general pipeline (blocks memo gates)
+
+3. LEGACY STATE GATES (only if classifier silent AND gates not blocked):
+   • _is_force_memo_request → memo
+   • Gates A/B/C (history indicators) → memo
+   • Gate D (structured details) → memo
+
+4. PHASE0 DEFAULT:
+   • general / article_text / table / calculator / continuation
+```
+
+Each layer is authoritative over the layers below it. The classifier
+cannot override hard gates; legacy gates cannot override the
+classifier.
+
+### Twelve-Turn Live Replay (post-CP11)
+
+  T1  custody memo                  → memo ✓
+  T2  labor memo AFTER custody      → memo (no custody leak) ✓
+  T3  bad-check AFTER labor         → memo (no labor leak) ✓
+  T4  divorce-harm AFTER bad-check  → memo (no bad-check leak) ✓
+  T5  rental memo AFTER divorce     → memo (no prior leak) ✓
+  T6  "ما موقفه القانوني؟"          → general (not memo) ✓
+  T7  "هل يُجبر على قبول الخلع؟"    → general (not memo) ✓
+  T8  "ما هو الطقس اليوم؟"          → off_topic (redirect) ✓
+  T9  "ارسم لي صورة"                → off_topic (no-image) ✓
+  T10 "أعطني وصفة طبخ"             → off_topic (no-cooking) ✓
+  T11 "."                           → clarify (ask for question) ✓
+  T12 "كم عدد القوانين في قطر؟"     → meta_info (48,325 stats) ✓
+
+### Principles Added
+
+1. **Pre-classifier-hard-gate principle**: inputs with definitive
+   surface signatures (noise, off-topic, fresh-memo directive) must
+   be resolved before the classifier. These signals are stronger
+   than any LLM judgment could be; wasting a classifier call on
+   them is both slower and error-prone.
+2. **Fresh-draft-is-stateless principle**: any explicit
+   "اكتب/صغ/احتاج + مذكرة/عريضة/لائحة" directive starts a brand-new
+   draft session. The handler must receive an empty history and
+   see only the current query. No sweeps, no topic recovery, no
+   fact accumulation from prior turns.
+3. **UNCLEAR-defaults-to-general principle**: when the classifier
+   is uncertain, the safe action is NOT to force memo. The memo
+   handler produces long, high-confidence-looking output; emitting
+   it on an uncertain intent causes user-visible damage. The
+   general pipeline is the graceful fallback.
+4. **Domain-scope principle**: a domain-specific assistant must
+   explicitly refuse out-of-scope queries. Letting image/recipe/
+   weather/noise through a legal pipeline always produces either
+   evasion (identity card) or contamination (stale facts). A polite
+   scope-aware rejection is the correct behaviour.
+
+### Regression — 12/12 CP11 + prior 140+ preserved
+
+  12/12   CP11 live replay (custody→labor→check→divorce→rental,
+           analysis questions, off-topic, noise, meta)
+  11/11   anti-hallucination
+  17/17   cp5 production scenario
+  14/14   context propagation
+  50/50   pytest phase2 + phase3
+
+### Scheduled Follow-up
+
+- CP12: weak domain classifier on "مستحقات موظف" → defamation
+  and "كم يبلغ راتب خبير" → defamation. Need a stricter
+  domain-to-query-content match; likely an LLM re-rank before
+  dispatching to domain-specific templates.
+- CP12: hallucinated citations (T4 "المادة 10" and T29
+  "النظام السياسي رقم 119/2025") still slip past the guardian.
+  Promote the guardian from "warn" to "block undocumented
+  citations in the legal_reasoning stage" — retrieval-gated output
+  principle from FINDING #13 must apply to ALL answer types, not
+  just memos.
+- CP12: OpenAI rate-limit handling — the bare "خطأ OpenAI (429)"
+  surfaces to the user. Add exponential backoff + fallback to
+  Ollama for non-citation-critical responses.
+- CP12: extend ``_OFF_TOPIC_PATTERNS`` with real production
+  data — review rejected queries weekly for missed patterns.
+- CP12: production shadow of the fresh-memo-directive gate —
+  log every gate firing with the query, the pre-gate state, and
+  whether the handler subsequently asked for more details.
+
