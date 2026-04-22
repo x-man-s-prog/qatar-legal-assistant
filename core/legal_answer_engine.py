@@ -278,12 +278,38 @@ async def compose_reasoned_answer(
             return result
         result.selected_sources = selected
 
+        # ── CP8 — pull domain expertise (if detected domain) ─────
+        _expertise = None
+        if query_domain:
+            try:
+                from core.qatar_legal_expertise import get_domain_expertise
+                # Map legacy query_domain to new domain_key when possible
+                _domain_key_map = {
+                    "عمالي":   "unlawful_termination",
+                    "أسري":    "family_custody",  # broad — may be nafaqa/divorce
+                    "جزائي":   None,  # too broad — don't force
+                    "family":  "family_custody",
+                    "labor":   "unlawful_termination",
+                    "traffic": None,
+                }
+                _mapped_key = _domain_key_map.get(query_domain, query_domain)
+                if _mapped_key:
+                    _expertise = get_domain_expertise(_mapped_key)
+                    # Secondary heuristic — check query for nafaqa/khula
+                    if _expertise and "نفقة" in query:
+                        _alt = get_domain_expertise("family_nafaqa")
+                        if _alt:
+                            _expertise = _alt
+            except Exception as _exp_err:
+                log.debug("answer_engine: expertise fetch failed: %s", _exp_err)
+
         # ── Stage 3: Compose cited answer ───────────────────────
         answer_text = await _compose_answer(
             query=query,
             classification=classification,
             selected_sources=selected,
             history=history,
+            domain_expertise=_expertise,
         )
         if not answer_text or len(answer_text) < 100:
             result.failure_reason = f"compose produced short output ({len(answer_text or '')})"
@@ -440,6 +466,7 @@ async def _compose_answer(
     classification:   QuestionClassification,
     selected_sources: list[SelectedSource],
     history:          Optional[list],
+    domain_expertise=None,        # CP8 — DomainExpertise or None
 ) -> str:
     sources_block = "\n".join(
         f"المادة ({s.article_number}) من {s.law_name}"
@@ -463,14 +490,29 @@ async def _compose_answer(
             )
             history_note = f"\nسياق المحادثة السابقة:\n{ctx}\n"
 
+    # CP8 — inject Qatari domain expertise when available
+    expertise_block = ""
+    if domain_expertise is not None:
+        try:
+            expertise_block = (
+                "\n═══ خبرة قانونية قطرية متخصصة (استخدمها لإثراء الإجابة) ═══\n"
+                + domain_expertise.to_prompt_hints()
+                + "\n"
+            )
+        except Exception:
+            expertise_block = ""
+
     user_message = (
         f"السؤال:\n{query}\n\n"
         f"نوع السؤال: {classification.question_type}\n"
         f"النطاق المتوقع: {classification.expected_scope}\n"
         f"{history_note}\n"
         f"المصادر القانونية المختارة للاستشهاد (لا تضف غيرها):\n"
-        f"{sources_block}\n\n"
-        f"اكتب الإجابة المُستشهدة الآن."
+        f"{sources_block}"
+        f"{expertise_block}\n"
+        f"اكتب الإجابة المُستشهدة الآن — استخدم الخبرة المتخصصة أعلاه "
+        f"(الأسس الشائعة، المبادئ الراسخة، الإجراءات، المحكمة المختصة) "
+        f"لإعطاء إجابة احترافية مفصلة."
     )
 
     try:

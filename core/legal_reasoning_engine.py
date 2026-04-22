@@ -295,6 +295,22 @@ async def compose_reasoned_memo(
     drafting_mode_label:   str,
     client_role:           str = "",
 ) -> ReasonedMemoResult:
+    # CP8 — augment with domain expertise + language normalization
+    # before invoking reasoning stages. These layers provide the
+    # LLM with Qatari-specific legal context it otherwise lacks.
+    try:
+        from core.qatar_legal_expertise import get_domain_expertise
+        _expertise = get_domain_expertise(domain_key)
+    except Exception:
+        _expertise = None
+    try:
+        from core.legal_language_normalizer import normalize_query
+        _norm = normalize_query(query)
+        # Use normalized query for reasoning — keeps retrieval clean
+        # while preserving original in user_facts for output fidelity.
+        _query_normalized = _norm.normalized
+    except Exception:
+        _query_normalized = query
     """Compose a lawyer-quality memo through LLM-driven reasoning.
 
     Parameters
@@ -362,6 +378,29 @@ async def compose_reasoned_memo(
         # If the primary article isn't in selected, this is a serious
         # signal. Still, proceed — compose can cite it anyway.
 
+        # ── CP8 — Knowledge graph expansion (before compose) ────
+        # Get the multi-hop article network so compose can weave the
+        # reasoning chain into prose. Non-blocking: if KG fails, we
+        # proceed without it.
+        _article_network = None
+        try:
+            from core.legal_knowledge_graph import expand_article_network
+            # Find the primary article's text in candidate_articles
+            _primary_text = ""
+            for a in candidate_articles:
+                if str(a.get("number", "")) == ground.primary_article:
+                    _primary_text = a.get("text", "") or ""
+                    break
+            if _primary_text:
+                _article_network = await expand_article_network(
+                    primary_article=ground.primary_article,
+                    primary_text=_primary_text,
+                    candidate_pool=candidate_articles,
+                    domain_key=domain_key,
+                )
+        except Exception as _kg_err:
+            log.debug("reasoning: KG expansion failed: %s", _kg_err)
+
         # ── Stage 4: Compose prose memo ─────────────────────────
         memo_text = await _compose_prose(
             ground=ground,
@@ -372,6 +411,8 @@ async def compose_reasoned_memo(
             drafting_mode_label=drafting_mode_label,
             client_role=client_role,
             domain_display=domain_display,
+            expertise=_expertise,         # CP8 — Qatari domain expertise
+            article_network=_article_network,  # CP8 — multi-hop reasoning
         )
         if not memo_text or len(memo_text) < 500:
             result.failure_reason = f"compose produced short output ({len(memo_text or '')})"
@@ -619,8 +660,16 @@ async def _compose_prose(
     drafting_mode_label:  str,
     client_role:          str,
     domain_display:       str,
+    expertise=None,                # CP8 — DomainExpertise or None
+    article_network=None,          # CP8 — ArticleNetwork or None
 ) -> str:
-    """LLM composes the final memo as prose."""
+    """LLM composes the final memo as prose.
+
+    CP8: context enriched with Qatari domain expertise (counter-
+    arguments, required evidence, landmark principles, procedural
+    notes, competent court) and multi-hop article reasoning chain.
+    The composer now has LAYERED CONTEXT, producing deeper memos.
+    """
     # Build context the composer LLM needs
     names_text   = "، ".join(extracted_facts_dict.get("names", [])) or "—"
     ages_text    = "، ".join(extracted_facts_dict.get("ages", [])) or "—"
@@ -641,6 +690,41 @@ async def _compose_prose(
         for p in selected_precedents
     ) or "(لا توجد أحكام تمييز ذات صلة مباشرة)"
 
+    # ── CP8: Qatari domain expertise (if available) ──
+    expertise_block = ""
+    if expertise is not None:
+        try:
+            expertise_block = (
+                "\n\n═══ خبرة قانونية قطرية متخصصة (استخدمها لإثراء المذكرة) ═══\n"
+                + expertise.to_prompt_hints()
+                + "\n"
+            )
+        except Exception:
+            expertise_block = ""
+
+    # ── CP8: Multi-hop article reasoning chain (if available) ──
+    network_block = ""
+    if article_network is not None and not article_network.is_empty():
+        parts = []
+        if article_network.reasoning_chain:
+            parts.append(f"السلسلة المنطقية: {article_network.reasoning_chain}")
+        if article_network.referenced_by_primary:
+            parts.append(
+                f"المادة الأساسية تشير إلى: "
+                f"{', '.join(article_network.referenced_by_primary)}"
+            )
+        if article_network.references_primary:
+            parts.append(
+                f"مواد تستشهد بالمادة الأساسية: "
+                f"{', '.join(article_network.references_primary)}"
+            )
+        if parts:
+            network_block = (
+                "\n\n═══ الشبكة المعرفية بين المواد (استخدمها لربط الاستشهادات) ═══\n"
+                + "\n".join(parts)
+                + "\n"
+            )
+
     user_message = (
         f"الأساس القانوني المحدد:\n"
         f"  • العنوان: {ground.label}\n"
@@ -657,8 +741,13 @@ async def _compose_prose(
         f"  تواريخ: {dates_text}\n"
         f"  مبالغ: {amounts_text}\n\n"
         f"المواد المختارة للاستشهاد (لا تضف غيرها):\n{articles_block}\n\n"
-        f"الأحكام المختارة للاستشهاد (لا تضف غيرها):\n{precedents_block}\n\n"
-        f"اكتب المذكرة الآن. prose قانونية، أقسام واضحة، أسلوب المحاكم القطرية."
+        f"الأحكام المختارة للاستشهاد (لا تضف غيرها):\n{precedents_block}"
+        f"{expertise_block}"
+        f"{network_block}\n"
+        f"اكتب المذكرة الآن — prose قانونية متماسكة، أقسامها واضحة، "
+        f"تستخدم الخبرة القطرية المتخصصة أعلاه (الأسس الشائعة، "
+        f"الدفوع المتوقعة، المبادئ الراسخة) لإثراء الحجة، وتربط المواد "
+        f"حسب الشبكة المعرفية إذا وُفرت."
     )
 
     try:

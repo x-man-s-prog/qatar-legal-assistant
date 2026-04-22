@@ -1185,3 +1185,172 @@ ALL-semantics, which made prose tests brittle.
   memo (1h), answer (30m), and topic (1h) can be tuned
   together without code changes.
 
+## 18. Deep Legal Intelligence — Knowledge Base + Graph + Normalizer (CP8)
+
+### The Intelligence Gap
+Post-CP7, reasoning engines OPERATED but had no deep domain knowledge.
+They produced structurally-correct memos and cited-answer shapes —
+but the CONTENT was shallow:
+  • No anticipation of opposing arguments.
+  • No awareness of required evidence per domain.
+  • No knowledge of competent courts, deadlines, procedural rules.
+  • No multi-hop reasoning between related articles.
+  • No handling of dialect / colloquial input.
+  • Generic precedent matching without legal-principle filtering.
+
+Example (pre-CP8): "أفاد المدعي بسوء سلوك المدعى عليها" as the whole
+defenses section. No anticipated defense. No required-evidence
+prompt. No procedural note. No principle citation.
+
+### The Four-Layer Knowledge Upgrade
+
+**Layer 1 — ``core/qatar_legal_expertise.py`` (hand-curated)**
+Structured Qatari legal expertise for 5 major domains:
+  • ``family_custody`` — 3 grounds (سوء سلوك / زواج بأجنبي / انتفاء
+    أهلية), 4 counter-arguments, 6 required-evidence types, competent
+    court, 6 landmark principles, procedural notes, common mistakes.
+  • ``family_nafaqa`` — zawjiyya + atfaal grounds, 4 defenses,
+    required docs, principles.
+  • ``unlawful_termination`` — 2 grounds, 4 defenses, required
+    evidence, Article 8 statute of limitations.
+  • ``bad_check`` — Article 357 doctrine, 5 defenses, principles
+    including "شيك الضمان لا يُعدّ من أدوات الوفاء".
+  • ``divorce_for_harm`` — 4 elements, hakameyn procedure, principles.
+
+Each domain generates a compact 400-600 token prompt hint inserted
+into the LLM composer's context. The LLM composer now REASONS WITH
+this expertise instead of inventing generic responses.
+
+**Layer 2 — ``core/legal_knowledge_graph.py`` (LLM-cached)**
+Multi-hop article expansion. Given a primary article, LLM identifies:
+  • ``referenced_by_primary`` — what the primary article cites.
+  • ``references_primary`` — what cites the primary article.
+  • ``same_topic`` — articles in the same chapter/topic.
+  • ``reasoning_chain`` — one-sentence Arabic description of how the
+    articles interconnect.
+
+Cached by fingerprint ``sha1({primary, pool_nums, domain_key})``.
+TTL 24h — legal text is stable. The composer prompt gets the chain
+and weaves it: "استناداً للمادة 183 فقرة 3 التي تشير إلى شروط المادة
+167، مع مراعاة المادة 168...".
+
+**Layer 3 — ``core/legal_language_normalizer.py``**
+Dialect + colloquial → formal legal Arabic. Pure function. Examples:
+  "طفشني"       → "فصلني"
+  "حرمتي"       → "زوجتي"
+  "شيك طاير"    → "شيك بدون رصيد"
+  "نصبني"       → "احتال علي"
+  "وش/ايش"      → "ماذا"
+Plus 14 legal-synonym sets for retrieval expansion. Retrieves with
+formal terms against the DB; preserves original user text for the
+memo's الوقائع section.
+
+**Layer 4 — Integration into engines**
+``legal_reasoning_engine.compose_reasoned_memo`` now:
+  1. Fetches domain expertise before calling stages.
+  2. Normalizes the query via the language normalizer.
+  3. After characterization, calls ``expand_article_network`` to
+     build the multi-hop reasoning chain.
+  4. Injects expertise + network into ``_compose_prose`` LLM
+     context.
+
+``legal_answer_engine.compose_reasoned_answer`` similarly:
+  1. Fetches domain expertise based on detected ``query_domain``.
+  2. Maps legacy domain labels to the expertise registry
+     (``عمالي`` → ``unlawful_termination``; ``أسري`` →
+     ``family_custody`` or ``family_nafaqa`` by query content).
+  3. Injects expertise block into ``_compose_answer`` LLM prompt.
+
+### The Observable Impact
+Live user scenario — T3 "1- احمد 4 سنوات 2- سوء سلوكها 3- تاريخ
+الطلاق 01/01/2023":
+
+**Pre-CP8 memo** (route=memo, ~1100 chars):
+  Generic defenses section: single bullet quoting the claim back.
+  No anticipated opposition, no specific evidence prompt, no
+  landmark principle, no multi-hop reasoning.
+
+**Post-CP8 memo** (route=memo, 1534 chars):
+  "إلى محكمة الأسرة الابتدائية القطرية"   ← competent_court
+  "استمرار هذا السلوك وعدم كونه حادثة عرضية"  ← required_element
+  "يُتوقع أن تدفع المدعى عليها بنفي السلوك المدّعى أو بعدم ثبوت
+   الضرر، ولكن القرائن المعتبرة ستُظهر خلاف ذلك"
+        ← ANTICIPATES counter-argument + cites landmark principle
+  "المادة 183 فقرة 3 ... كما تشير المادة 182 إلى الإجراءات"
+        ← multi-hop article reasoning
+  "مصلحة المحضون الفضلى هي المعيار الحاكم"    ← landmark principle
+
+### Architecture
+```
+query
+  ↓
+legal_language_normalizer.normalize_query(query)
+  ↓ (canonical terms + user's original preserved)
+reasoning_engine OR answer_engine
+  │
+  ├─ qatar_legal_expertise.get_domain_expertise(domain_key)
+  │     ↓ (5 hand-curated domain packs)
+  │
+  ├─ CHARACTERIZE stage (LLM + domain hints)
+  │
+  ├─ SELECT / RERANK (LLM + domain hints)
+  │
+  ├─ legal_knowledge_graph.expand_article_network(primary, pool)
+  │     ↓ (multi-hop Article chain, LLM-cached)
+  │
+  ├─ COMPOSE (LLM + expertise block + network block + selected sources)
+  │     ↓
+  └─ VERIFY (programmatic)
+```
+
+### Principles Added
+
+1. **Expertise-enriched reasoning principle**: When a domain is
+   detected AND has curated expertise, the LLM composer receives
+   it as context. This is NOT a hard constraint (the LLM still has
+   autonomy) — it's DEEP KNOWLEDGE injection that raises output
+   quality floor.
+
+2. **Multi-hop reasoning principle**: A primary article is never
+   cited alone. The knowledge graph expands it into its network,
+   and the composer is instructed to weave citations coherently.
+
+3. **Dialect-blind retrieval, dialect-faithful output**: Retrieval
+   uses normalized formal Arabic (to match DB). The user-facing
+   output preserves the user's original wording verbatim. The
+   system speaks the user's language while searching in the
+   court's language.
+
+### Coverage Status
+
+Covered domains (``list_covered_domains()``):
+  family_custody, family_nafaqa, unlawful_termination,
+  bad_check, divorce_for_harm.
+
+The top 10 frequently-requested domains by Qatari users. Coverage
+grows via code review — each new domain requires validated
+hand-curated expertise (not LLM-generated, not extrapolated from
+examples).
+
+### Regression — 174/174 GREEN
+
+  11/11   anti-hallucination
+  17/17   cp5 production scenario
+  14/14   context propagation
+ 132/132  pytest unit + E2E
+
+### Scheduled Follow-up
+
+- CP9: extend expertise to 5 more domains (theft, fraud,
+  defamation, rental_residential, commercial_dispute).
+- CP9: cassation principles extractor — build an inverse index from
+  existing Tamyeez rulings to their established principles, so the
+  precedent reranker can match on principle, not text.
+- CP9: automatic expertise enrichment — offline pipeline that
+  suggests new expertise entries based on user-session patterns.
+- CP9: extend normalizer with auto-learning — the LLM extracts
+  unrecognized dialect terms during production and proposes
+  entries for human review.
+- CP9: combine expertise + network into a unified "Legal Context
+  Packet" that encapsulates everything a single memo/answer needs.
+
