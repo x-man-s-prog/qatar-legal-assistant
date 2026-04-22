@@ -1534,3 +1534,214 @@ Same transcript, post-CP9:
   ``_FAST_*`` heuristics for outdated phrasings and add recent
   failure modes.
 
+
+## 20. Topic-Carryover, Meta False-Positives, and Gate-Veto (CP10)
+
+### Three Concurrent Failures in the Same Transcript
+
+A live 9-turn transcript — one session, one user — exposed three
+distinct bugs that CP9 did not cover. Each is a different failure
+mode from CP9's catastrophic memo-drift, and each has its own root
+cause:
+
+**Failure A — Topic carry-over on a new draft request.**
+
+  T3:  assistant asks for drug-case details
+  T4:  user provides drug facts → drug memo drafted (correct)
+  T5:  user: "اكتب مذكرة اسقاط حضانه" → **drug memo drafted again**
+
+The user explicitly requested a NEW memo on a DIFFERENT topic
+(custody-drop). The classifier correctly flagged
+``LEGAL_DRAFT_REQUEST``, but the routing verdict was
+``release_phase=False``. Consequence: the prior memo's stored
+topic and accumulated facts were not wiped, and ``handle_memo_smart``
+sweep-recovered them from the session history blob and
+``session_topic_memory`` — so the new حضانة request was composed
+from the prior case's drug facts.
+
+**Failure B — Content question misclassified as meta.**
+
+  T8:  "كم يبلغ اجمالي راتب موظف بدرجة سابعة في المجلس الوطني للتخطيط"
+  →    identity card shown ("أنا ميزان...")
+
+This is a legal/administrative question about a civil-service
+salary grade — pure content. Two layers conspired to mis-route
+it. The fast-path ``_FAST_META_PREFIXES`` was too broad (``"كم"``
+prefix). Even when the fast-path missed, the LLM classifier was
+not taught to distinguish:
+  • ``كم عدد المبادئ`` (meta — system stat)
+  • ``كم يبلغ راتب ...`` (content — legal quantity)
+And ``_build_meta_response`` fell through to the identity card
+on any unrecognised meta query, so even a correctly-classified
+meta with an unknown metric produced the wrong output.
+
+**Failure C — Unknown meta metric shown as identity card.**
+
+  T7:  "كم عدد التشريعات ؟" → identity card
+
+Correct classification as meta, but ``_build_meta_response`` had
+cases only for {principles, articles, laws}, not ``التشريعات``.
+Unknown metric → fell through to identity card → user felt
+evaded.
+
+### The Meta-Root-Cause (Round 5)
+
+These three failures share one underlying pattern: **the intent
+classifier is authoritative for intent, but legacy handlers and
+gates downstream do not honour its verdict.**
+
+  Failure A: classifier said ``LEGAL_DRAFT_REQUEST`` — but the
+  routing table didn't clear the prior topic/facts, and the memo
+  handler recovered them from history.
+
+  Failure B & C: classifier said ``META_SYSTEM_QUERY``, but
+  ``_build_meta_response`` had only three recognized metrics and
+  fell to identity card on miss. In addition, ``_FAST_META`` was
+  too liberal — classifying content questions as meta by prefix.
+
+  Bonus failure observed while fixing: after a meta/casual pivot,
+  the user's NEXT legal question ("كم يبلغ راتب") still hit
+  ``handle_memo_smart`` because the history blob contained the
+  prior "قبل ما أكتب مذكرة" assistant turn, and Gates A/B/C
+  (introduced pre-CP9 as a safety net) override the classifier's
+  non-memo verdict.
+
+### Root Fixes — Five Surgical Changes
+
+**Fix 1 — Hard-reset on new draft mid-memo**
+
+  ``core/session_state.py``:
+  ```python
+  def reset_memo_state_hard(self) -> None:
+      self.phase       = Phase.IDLE
+      self.topic       = None   # (soft reset preserves topic; hard wipes)
+      self.memo_facts  = []
+  ```
+  ``core/session_topic_memory.py``:
+  ```python
+  async def clear_session_topic(session_id) -> bool
+  def   clear_session_topic_sync(session_id) -> bool
+  ```
+  ``core/turn_intent_classifier.py`` — routing table for
+  ``LEGAL_DRAFT_REQUEST``:
+  ```python
+  {"route_to": "memo", "release_phase": True, "reset_hard": True}
+  ```
+  ``IntentClassification`` dataclass gained a ``reset_hard: bool``
+  field propagated through cache, LLM parse, and fast-path.
+
+**Fix 2 — Router: apply hard-reset + empty-history**
+
+  When ``_turn_intent.reset_hard`` is true, the router:
+  • Calls ``reset_memo_state_hard()`` on SessionState.
+  • Calls ``clear_session_topic_sync(sid)`` to wipe the separate
+    Redis topic-memory layer.
+  • Passes an **empty list** (not ``_server_history``) to
+    ``handle_memo_smart``, so the memo handler's full-sweep
+    recovery can't resurrect prior-topic facts.
+
+**Fix 3 — Narrow meta fast-path + LLM tuning**
+
+  ``_FAST_META_PREFIXES`` → ``_FAST_META_EXACT_PHRASES`` (specific
+  phrases only, not a generic ``كم`` prefix). Added
+  ``_LEGAL_CONTENT_HINTS`` — a set of content markers (راتب،
+  موظف، قيمة، تعويض، نسبة، ...) that, when present, DISABLE
+  the meta fast-path entirely and defer to the LLM.
+
+  Classifier prompt: five new rules (11–15) defining precisely
+  when "كم" is meta vs content, plus a safe-default rule:
+  "when unclear between meta and new_legal_question, prefer
+  new_legal_question" because a misclassified-as-meta blocks
+  the real answer, while misclassified-as-content still produces
+  a correct legal answer.
+
+**Fix 4 — Meta response returns None on unknown, degrades**
+
+  ``_build_meta_response`` now:
+  • Returns an identity card ONLY when the query explicitly
+    matches ``_IDENTITY_TRIGGERS`` (من انت / عرفني عليك / شنو
+    قدراتك / هل تستطيع ...).
+  • Returns ``None`` when the query looks meta but matches no
+    known metric — the router then degrades to the general
+    legal pipeline rather than showing the identity card.
+  • Added stats cases for التشريعات / القوانين / الأحكام /
+    القضايا / المجالات / الإجابات الجاهزة.
+
+**Fix 5 — Classifier veto on legacy memo gates**
+
+  ``routers/query_router.py`` added:
+  ```python
+  _classifier_blocks_memo_gates = bool(
+      _turn_intent is not None
+      and _turn_intent.intent.value in (
+          "new_legal_question", "meta_system_query",
+          "casual_social", "complaint_feedback",
+          "clarification", "command",
+      )
+  )
+  ```
+  This flag gates the history-blob force-memo paths:
+  ``_is_force_memo_request``, Gates A/B/C, Gate D. When the
+  classifier has made a non-memo decision, these fallback
+  heuristics CANNOT override it. The classifier is authoritative.
+
+### Nine-Turn Live Replay (post-CP10)
+
+  T1  "ما هي عقوبات المرور..."           → general (1051c) ✓
+  T2  "هل من بينها حجز المركبة ؟"          → general (483c)  ✓
+  T3  "اكتب لي مذكرة مخدرات..."          → memo_ask_details ✓
+  T4  "1- حشيش 20 قرام..."               → memo (1691c)    ✓
+  T5  "اكتب مذكرة اسقاط حضانه"           → memo_ask_topic (hard-reset
+       — previous drug facts did NOT leak into this ask)       ✓
+  T6  "كم مبدأ قضائي عندك ؟"              → meta (663 stats)  ✓
+  T7  "كم عدد التشريعات ؟"               → meta (48,325 stats) ✓
+  T8  "كم يبلغ راتب موظف بدرجة سابعة"     → general (426c)    ✓
+  T9  "ماتعرف تجاوب ؟"                   → casual (apology)  ✓
+
+### Principles Added
+
+1. **Authoritative-intent principle**: when the CP9 intent classifier
+   has a non-default verdict, downstream heuristic gates MUST NOT
+   override it. The gates are a fallback for when the classifier
+   is silent — not a parallel decision layer.
+2. **Hard-reset principle**: an explicit new-draft request clears
+   ALL memo state — phase + topic + facts + session-topic-memory.
+   Soft reset (phase only, topic sticky) is for casual pivots
+   where the user might return to the prior topic; hard reset
+   is for explicit topic changes.
+3. **Degrade-not-deflect principle**: when a handler cannot serve a
+   query, it must DEGRADE to the next pipeline stage, not emit an
+   off-topic generic reply. Returning ``None`` from
+   ``_build_meta_response`` on unknown metrics lets the router
+   fall through to the general answer engine.
+4. **Safe-default-for-ambiguity principle**: when the classifier
+   is genuinely unsure between meta and content, prefer content.
+   The asymmetry of failure costs (meta-miss blocks the real
+   answer; content-miss still produces a legal answer) makes
+   this the correct bias.
+
+### Regression — live replay 9/9 + prior 140/140 preserved
+
+  9/9    CP10 live re-play (T1–T9)
+  11/11  anti-hallucination
+  17/17  cp5 production scenario
+  14/14  context propagation
+  50/50  pytest phase2 + phase3 (subset run)
+
+### Scheduled Follow-up
+
+- CP11: refactor the force-memo gates as a single explicit fallback
+  called only when ``_turn_intent`` is None — currently they are
+  still inline blocks. The current veto flag works but is brittle
+  against future gate additions.
+- CP11: make ``handle_memo_smart`` accept an explicit ``fresh: bool``
+  parameter so the memo handler itself knows whether to sweep
+  history — rather than relying on the router to pass an empty
+  list. This is a cleaner contract.
+- CP11: move ``_build_meta_response`` into a dedicated
+  ``core/meta_response.py`` with a registry of (metric_pattern
+  → response_builder) so adding a new stat is one line.
+- CP11: production-shadow the intent classifier for two weeks —
+  log (query, classification, actual-route-taken, user-rating)
+  and review miscategorisations weekly.
+

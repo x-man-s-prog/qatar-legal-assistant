@@ -85,6 +85,30 @@ async def set_session_topic(session_id: str, topic: str) -> bool:
         return False
 
 
+async def clear_session_topic(session_id: str) -> bool:
+    """Delete any stored topic for ``session_id``.
+
+    Used when the user explicitly pivots to a new memo on a different
+    topic (``LEGAL_DRAFT_REQUEST`` with ``reset_hard=True``) — the
+    prior topic must NOT be silently reused. FINDING #20.
+
+    Returns True if the key was deleted (or didn't exist), False only
+    on Redis failure. Never raises.
+    """
+    if not session_id:
+        return False
+    try:
+        from core.redis_client import get_redis_client
+        client = await get_redis_client(db=2)
+        key = _KEY_PATTERN.format(sid=session_id)
+        await client.delete(key)
+        log.info("session_topic: cleared sid=%s", session_id[:12])
+        return True
+    except Exception as e:
+        log.warning("session_topic: clear failed: %s", e)
+        return False
+
+
 async def get_session_topic(session_id: str) -> Optional[str]:
     """Retrieve topic stored for ``session_id``.
 
@@ -142,9 +166,21 @@ def get_session_topic_sync(session_id: str) -> Optional[str]:
         return None
 
 
+def clear_session_topic_sync(session_id: str) -> bool:
+    """Sync wrapper over ``clear_session_topic``. Never raises."""
+    try:
+        from core.runtime_v2.corpus import _bg as _corpus_bg
+        return bool(_corpus_bg.run(clear_session_topic(session_id)))
+    except Exception as e:
+        log.debug("session_topic_sync: clear failed: %s", e)
+        return False
+
+
 __all__ = [
     "set_session_topic",
     "get_session_topic",
+    "clear_session_topic",
     "set_session_topic_sync",
     "get_session_topic_sync",
+    "clear_session_topic_sync",
 ]

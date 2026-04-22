@@ -123,6 +123,7 @@ class IntentClassification:
     confidence:       float       = 0.0
     route_to:         str         = "default"  # memo/general/meta/casual/command
     release_phase:    bool        = False       # drop MEMO_* phase?
+    reset_hard:       bool        = False       # wipe topic+facts (FINDING #20)
     reasoning:        str         = ""
 
 
@@ -131,16 +132,19 @@ class IntentClassification:
 # ═══════════════════════════════════════════════════════════════════
 
 _INTENT_ROUTING = {
-    TurnIntent.MEMO_CONTINUE_DETAILS: {"route_to": "memo",    "release_phase": False},
-    TurnIntent.MEMO_CONTINUE_REFINE:  {"route_to": "memo",    "release_phase": False},
-    TurnIntent.LEGAL_DRAFT_REQUEST:   {"route_to": "memo",    "release_phase": False},
-    TurnIntent.NEW_LEGAL_QUESTION:    {"route_to": "general", "release_phase": True},
-    TurnIntent.META_SYSTEM_QUERY:     {"route_to": "meta",    "release_phase": True},
-    TurnIntent.CASUAL_SOCIAL:         {"route_to": "casual",  "release_phase": True},
-    TurnIntent.COMPLAINT_FEEDBACK:    {"route_to": "casual",  "release_phase": False},
-    TurnIntent.CLARIFICATION:         {"route_to": "general", "release_phase": False},
-    TurnIntent.COMMAND:               {"route_to": "command", "release_phase": False},
-    TurnIntent.UNCLEAR:               {"route_to": "default", "release_phase": False},
+    TurnIntent.MEMO_CONTINUE_DETAILS: {"route_to": "memo",    "release_phase": False, "reset_hard": False},
+    TurnIntent.MEMO_CONTINUE_REFINE:  {"route_to": "memo",    "release_phase": False, "reset_hard": False},
+    # FINDING #20: a NEW draft request must HARD-reset memo slots.
+    # Without reset, prior topic's facts (e.g. drug case) leak into
+    # the new memo (e.g. custody) producing hybrid nonsense.
+    TurnIntent.LEGAL_DRAFT_REQUEST:   {"route_to": "memo",    "release_phase": True,  "reset_hard": True},
+    TurnIntent.NEW_LEGAL_QUESTION:    {"route_to": "general", "release_phase": True,  "reset_hard": False},
+    TurnIntent.META_SYSTEM_QUERY:     {"route_to": "meta",    "release_phase": True,  "reset_hard": False},
+    TurnIntent.CASUAL_SOCIAL:         {"route_to": "casual",  "release_phase": True,  "reset_hard": False},
+    TurnIntent.COMPLAINT_FEEDBACK:    {"route_to": "casual",  "release_phase": False, "reset_hard": False},
+    TurnIntent.CLARIFICATION:         {"route_to": "general", "release_phase": False, "reset_hard": False},
+    TurnIntent.COMMAND:               {"route_to": "command", "release_phase": False, "reset_hard": False},
+    TurnIntent.UNCLEAR:               {"route_to": "default", "release_phase": False, "reset_hard": False},
 }
 
 
@@ -210,6 +214,26 @@ _INTENT_CLASSIFY_SYSTEM = """\
       منك هذه التفاصيل" → memo_continue_details.
     - غير ذلك → new_legal_question أو unclear.
 
+قواعد حاسمة جداً للتمييز بين meta والسؤال القانوني (تجنّب الخلط):
+11. "meta_system_query" = سؤال عن موارد/قدرات النظام نفسه فقط. أمثلة
+    دقيقة: "كم عدد المبادئ/الأحكام/المواد/التشريعات عندك؟"، "شنو
+    قدراتك؟"، "عرفني عليك"، "هل تستطيع صياغة عقد؟".
+12. كل سؤال "كم يبلغ/كم قيمة/كم نسبة/كم راتب/كم أجر/كم تعويض/
+    كم مدة/كم سنة/كم يوم/كم ساعة" عن محتوى قانوني حقيقي = سؤال
+    محتوى (new_legal_question)، وليس meta. مثال: "كم يبلغ راتب
+    موظف بدرجة سابعة في المجلس الوطني؟" = new_legal_question، لأنه
+    سؤال إداري/قانوني عن راتب موظف، وليس عن موارد النظام.
+13. إذا السؤال يبدأ بـ "كم" لكن يحتوي على كلمات محتوى قانوني
+    حقيقية (راتب، موظف، درجة، عقوبة، تعويض، نفقة، حضانة، ميراث،
+    قانون رقم X، المادة Y، محكمة، قضية، دعوى) → new_legal_question.
+14. إذا السؤال يبدأ بـ "كم" واللاحق منه مفرد/إحصاء لمورد في النظام
+    فقط (المبادئ، الأحكام، المواد، التشريعات، القضايا، المجالات)
+    → meta_system_query.
+15. عند الشك بين meta و new_legal_question: الافتراض الآمن هو
+    new_legal_question (نترك النظام يعالجه قانونياً)، لأن خطأ
+    "meta-وهو-قانوني" يُفقد الإجابة، بينما خطأ "قانوني-وهو-meta"
+    يُنتج إجابة قانونية صحيحة غالباً.
+
 أخرج JSON فقط:
 {
   "intent": "casual_social",
@@ -258,6 +282,7 @@ async def classify_turn(
                 confidence    = float(cached.get("confidence", 0.0)),
                 route_to      = str(cached.get("route_to", "default")),
                 release_phase = bool(cached.get("release_phase", False)),
+                reset_hard    = bool(cached.get("reset_hard", False)),
                 reasoning     = str(cached.get("reasoning", "")),
             )
             return c
@@ -302,6 +327,7 @@ async def classify_turn(
             confidence    = float(raw.get("confidence", 0.5)),
             route_to      = routing["route_to"],
             release_phase = routing["release_phase"],
+            reset_hard    = routing.get("reset_hard", False),
             reasoning     = str(raw.get("reasoning", ""))[:200],
         )
     except Exception as e:
@@ -324,12 +350,41 @@ _FAST_CASUAL = frozenset({
     "كيف الحال", "كيفك", "شخبارك", "انت بخير",
 })
 
-_FAST_META_PREFIXES = (
-    "كم عدد", "كم مبدأ", "كم قانون",
-    "شنو قدراتك", "وش قدراتك", "ايش قدراتك",
-    "عرفني عليك", "من انت", "من أنت",
+# ── Meta fast-path — NARROW and system-term-gated (FINDING #20) ──
+# Before FINDING #20, "كم عدد" was a prefix match which caused
+# false-meta routing for queries like "كم يبلغ راتب موظف".
+# Now fast-path requires BOTH (a) a known system-term phrase OR
+# (b) an explicit identity/capability phrase.
+#
+# The presence of legal content terms (راتب/موظف/عقوبة/تعويض/...)
+# in _LEGAL_CONTENT_HINTS disables the meta fast-path entirely —
+# we defer to the LLM classifier so it can decide content vs meta.
+
+_FAST_META_EXACT_PHRASES = (
+    # Stats about system resources (exact phrases, anchored)
+    "كم عدد المبادئ", "كم عدد الأحكام", "كم عدد المواد",
+    "كم عدد التشريعات", "كم عدد القوانين", "كم عدد القضايا",
+    "كم عدد المجالات", "كم مبدأ عندك", "كم مادة عندك",
+    "كم حكم تمييز", "كم حكم عندك", "كم قانون عندك",
+    # Identity / self
+    "من انت", "من أنت", "عرفني عليك", "عرّفني عليك",
+    # Capabilities
+    "شنو قدراتك", "وش قدراتك", "ايش قدراتك", "ما قدراتك",
     "شنو تسوي", "ايش تسوي", "وش تسوي",
-    "هل تستطيع", "هل تقدر",
+    "هل تستطيع", "هل تقدر", "تقدر تسوي",
+)
+
+# Phrases that DISABLE meta fast-path — content-heavy even if they
+# start with "كم". If ANY of these appears in the query, defer to LLM.
+_LEGAL_CONTENT_HINTS = (
+    "راتب", "اجر", "أجر", "مرتب", "بدل", "علاوة", "تعويض",
+    "نفقة", "حضانة", "ميراث", "عقوبة", "غرامة", "رسوم",
+    "مدة", "سنة", "يوم", "شهر", "اسبوع",
+    "قضية", "دعوى", "موظف", "عامل", "محكمة",
+    "درجة سابعة", "درجة أولى", "درجة ثانية", "المجلس",
+    "الوزارة", "الهيئة", "الجهاز",
+    # Specific numeric-content terms
+    "قيمة", "مقدار", "نسبة", "حد", "حدّ",
 )
 
 _FAST_COMPLAINT_PATTERNS = (
@@ -356,20 +411,26 @@ def _fast_path_classify(q: str) -> Optional[IntentClassification]:
             confidence    = 0.95,
             route_to      = r["route_to"],
             release_phase = r["release_phase"],
+            reset_hard    = r.get("reset_hard", False),
             reasoning     = "fast-path: exact casual phrase",
         )
 
-    # Meta prefix match
-    for p in _FAST_META_PREFIXES:
-        if q_lower.startswith(p):
-            r = _INTENT_ROUTING[TurnIntent.META_SYSTEM_QUERY]
-            return IntentClassification(
-                intent        = TurnIntent.META_SYSTEM_QUERY,
-                confidence    = 0.9,
-                route_to      = r["route_to"],
-                release_phase = r["release_phase"],
-                reasoning     = f"fast-path: meta prefix '{p}'",
-            )
+    # Meta fast-path — DISABLED when the query carries legal content
+    # terms (FINDING #20). "كم يبلغ راتب موظف..." must never be
+    # classified as meta via the fast-path; defer to the LLM.
+    _has_content_hint = any(hint in q_lower for hint in _LEGAL_CONTENT_HINTS)
+    if not _has_content_hint:
+        for p in _FAST_META_EXACT_PHRASES:
+            if p in q_lower:
+                r = _INTENT_ROUTING[TurnIntent.META_SYSTEM_QUERY]
+                return IntentClassification(
+                    intent        = TurnIntent.META_SYSTEM_QUERY,
+                    confidence    = 0.9,
+                    route_to      = r["route_to"],
+                    release_phase = r["release_phase"],
+                    reset_hard    = r.get("reset_hard", False),
+                    reasoning     = f"fast-path: meta phrase '{p}'",
+                )
 
     # Complaint substring match
     for p in _FAST_COMPLAINT_PATTERNS:
@@ -380,6 +441,7 @@ def _fast_path_classify(q: str) -> Optional[IntentClassification]:
                 confidence    = 0.85,
                 route_to      = r["route_to"],
                 release_phase = r["release_phase"],
+                reset_hard    = r.get("reset_hard", False),
                 reasoning     = f"fast-path: complaint pattern '{p}'",
             )
 
@@ -391,6 +453,7 @@ def _fast_path_classify(q: str) -> Optional[IntentClassification]:
             confidence    = 0.95,
             route_to      = r["route_to"],
             release_phase = r["release_phase"],
+            reset_hard    = r.get("reset_hard", False),
             reasoning     = "fast-path: exact command",
         )
 
@@ -422,6 +485,7 @@ def _to_dict(c: IntentClassification) -> dict:
         "confidence":    c.confidence,
         "route_to":      c.route_to,
         "release_phase": c.release_phase,
+        "reset_hard":    c.reset_hard,
         "reasoning":     c.reasoning,
     }
 

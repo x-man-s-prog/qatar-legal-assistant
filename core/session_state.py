@@ -143,6 +143,21 @@ class SessionState:
         # Preserve topic (sticky for quick return) but drop pending facts.
         self.memo_facts = []
 
+    def reset_memo_state_hard(self) -> None:
+        """Hard reset — used when user EXPLICITLY requests a new memo on
+        a different topic. Wipes phase AND topic AND accumulated facts
+        so the new memo starts on a clean slate.
+
+        FINDING #20 root fix: without this, a new ``LEGAL_DRAFT_REQUEST``
+        while mid-memo inherits the prior topic's facts and produces
+        a hybrid nonsense memo (e.g. user asks for custody memo while
+        drug-case facts are still in memo_facts → drug memo emerges
+        labeled as custody).
+        """
+        self.phase = Phase.IDLE
+        self.topic = None
+        self.memo_facts = []
+
     # ── Phase transitions ──────────────────────────────────────
     def transition_by_route(self, route: str) -> None:
         """Update phase based on the route the handler decided to emit."""

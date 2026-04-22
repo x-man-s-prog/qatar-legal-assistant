@@ -2422,15 +2422,42 @@ async def handle_memo_smart(
 # POST /api/v1/stream/ — SSE framing over runtime_v2 adapter
 # ═════════════════════════════════════════════════════════════════
 
-def _build_meta_response(query: str) -> str:
+def _build_meta_response(query: str) -> Optional[str]:
     """Respond to system-capability / metadata questions.
 
-    Uses live stats from the knowledge base when available. Falls
-    back to general capability description.
+    Uses live stats from the knowledge base when available.
+
+    FINDING #20: Returns ``None`` on unknown/ambiguous meta queries —
+    the caller must then degrade to the general legal pipeline rather
+    than show the identity card. This prevents the failure mode where
+    "كم يبلغ راتب موظف..." (a legal content question misclassified
+    as meta) ends up showing a generic capability card instead of
+    a real legal answer.
     """
     q = (query or "").lower()
 
-    # Stats on principles / articles / rulings
+    # ─── Identity / capability — ONLY for explicit identity asks ───
+    _IDENTITY_TRIGGERS = (
+        "من انت", "من أنت", "عرفني عليك", "عرّفني عليك",
+        "شنو قدراتك", "وش قدراتك", "ايش قدراتك", "ما قدراتك",
+        "شنو تسوي", "ايش تسوي", "وش تسوي",
+        "هل تستطيع", "هل تقدر", "تقدر تسوي",
+        "ما هي قدراتك", "ما هي إمكانياتك", "ما إمكانياتك",
+    )
+    if any(t in q for t in _IDENTITY_TRIGGERS):
+        return (
+            "أنا **ميزان** — مستشارك القانوني القطري الذكي.\n\n"
+            "ماذا أقدر أسوي:\n"
+            "• **استشارات قانونية** مُستشهدة بالمواد وأحكام التمييز.\n"
+            "• **صياغة مذكرات** بأسلوب المحاكم القطرية (دعوى، دفاع، طعن).\n"
+            "• **صياغة عقود** بشروط قانونية سليمة.\n"
+            "• **تحليل قضايا** من عدة زوايا (قوة الموقف، توقع رد الخصم، الأدلة).\n"
+            "• **شرح القوانين** بأسلوب مبسّط مع الاستشهاد بالمصدر.\n"
+            "• **حساب مستحقات** (مكافأة نهاية الخدمة، نفقة، تعويضات).\n\n"
+            "أفهم اللهجة القطرية والخليجية، وأتحدث بالعربية الفصحى القانونية."
+        )
+
+    # ─── Stats: principles ───
     if any(k in q for k in ["عدد المبادئ", "كم مبدأ", "كم مبادئ"]):
         return (
             "قاعدة البيانات عندي تحتوي على **663 مبدأ قضائي** "
@@ -2447,10 +2474,17 @@ def _build_meta_response(query: str) -> str:
             "و **48,325 مادة قانونية** من التشريعات القطرية."
         )
 
-    if any(k in q for k in ["عدد المواد", "كم مادة", "كم قانون"]):
+    # ─── Stats: articles / laws / legislations ───
+    if any(k in q for k in [
+        "عدد المواد", "كم مادة",
+        "عدد التشريعات", "كم تشريع",
+        "عدد القوانين", "كم قانون",
+    ]):
         return (
             "قاعدة البيانات تحتوي على:\n\n"
-            "• **48,325 مادة قانونية** من التشريعات القطرية الكاملة.\n"
+            "• **48,325 مادة قانونية** من التشريعات القطرية الكاملة "
+            "(قوانين العقوبات، الأسرة، العمل، الإجراءات المدنية/الجزائية، "
+            "التجارة، الإيجار، المرور، وغيرها).\n"
             "• **1,112 حكم تمييز** من محكمة التمييز القطرية.\n"
             "• **663 مبدأ قضائي** مستخلص ومصنّف.\n"
             "• **44 إجابة جاهزة** لأكثر الأسئلة القانونية شيوعاً.\n"
@@ -2459,18 +2493,54 @@ def _build_meta_response(query: str) -> str:
             "التجارة، الإيجار، المرور، الإجراءات المدنية والجنائية."
         )
 
-    # General capability description
-    return (
-        "أنا **ميزان** — مستشارك القانوني القطري الذكي.\n\n"
-        "ماذا أقدر أسوي:\n"
-        "• **استشارات قانونية** مُستشهدة بالمواد وأحكام التمييز.\n"
-        "• **صياغة مذكرات** بأسلوب المحاكم القطرية (دعوى، دفاع، طعن).\n"
-        "• **صياغة عقود** بشروط قانونية سليمة.\n"
-        "• **تحليل قضايا** من عدة زوايا (قوة الموقف، توقع رد الخصم، الأدلة).\n"
-        "• **شرح القوانين** بأسلوب مبسّط مع الاستشهاد بالمصدر.\n"
-        "• **حساب مستحقات** (مكافأة نهاية الخدمة، نفقة، تعويضات).\n\n"
-        "أفهم اللهجة القطرية والخليجية، وأتحدث بالعربية الفصحى القانونية."
+    # ─── Stats: rulings / tameez ───
+    if any(k in q for k in [
+        "عدد الأحكام", "كم حكم", "عدد أحكام التمييز",
+        "كم حكم تمييز", "كم احكام",
+    ]):
+        return (
+            "قاعدة البيانات عندي تحتوي على **1,112 حكم تمييز** "
+            "كامل النص من محكمة التمييز القطرية، مع استخلاص "
+            "**663 مبدأ قضائي** منها.\n\n"
+            "كل حكم مربوط بالمادة أو المواد القانونية المعنية "
+            "(فهرس الربط: 2,442 مادة ← 3,553 حكم)."
+        )
+
+    # ─── Stats: cases / queries covered ───
+    if any(k in q for k in [
+        "عدد القضايا", "كم قضية", "عدد المجالات", "كم مجال",
+        "عدد الإجابات الجاهزة", "كم اجابة جاهزة",
+    ]):
+        return (
+            "أغطّي حالياً:\n\n"
+            "• **44 إجابة جاهزة** لأكثر الأسئلة القانونية شيوعاً "
+            "(شيك بدون رصيد، حضانة، نفقة، فصل تعسفي، حبس احتياطي، ...).\n"
+            "• **45 موضوع** مربوط بالمواد القانونية المقابلة له.\n"
+            "• **7 حزم خبرة** متعمّقة (family_custody, family_nafaqa, "
+            "unlawful_termination, bad_check, divorce_for_harm, "
+            "criminal_drug_use, traffic) — بأركان الجريمة، الدفوع "
+            "المتوقعة، الأدلة المطلوبة، والمبادئ القضائية لكل مجال."
+        )
+
+    # ─── Unknown meta — degrade to general pipeline ───
+    # Do NOT show the identity card here. The caller will fall
+    # through to general legal processing when we return None.
+    return None
+
+
+def _is_identity_question(query: str) -> bool:
+    """True when the query is an explicit identity/capability ask.
+    Used to distinguish real identity questions from content questions
+    that happened to be misclassified as meta."""
+    q = (query or "").lower()
+    _IDENTITY_TRIGGERS = (
+        "من انت", "من أنت", "عرفني عليك", "عرّفني عليك",
+        "شنو قدراتك", "وش قدراتك", "ايش قدراتك", "ما قدراتك",
+        "شنو تسوي", "ايش تسوي", "وش تسوي",
+        "هل تستطيع", "هل تقدر", "تقدر تسوي",
+        "ما هي قدراتك", "ما هي إمكانياتك", "ما إمكانياتك",
     )
+    return any(t in q for t in _IDENTITY_TRIGGERS)
 
 
 def _build_casual_response(query: str, is_complaint: bool = False) -> str:
@@ -2756,13 +2826,24 @@ async def query_stream(req: QueryRequest, request: Request = None):
 
     # ─── Apply intent-driven routing decisions ───
     if _turn_intent is not None:
-        # Release phase when intent demands
+        # Release phase when intent demands.
+        # FINDING #20: if the intent classifier marks ``reset_hard``
+        # (e.g. LEGAL_DRAFT_REQUEST mid-memo), do a FULL reset —
+        # phase + topic + pending facts. Otherwise the prior memo's
+        # topic/facts leak into the new memo.
         if _turn_intent.release_phase and _session_state is not None:
-            _session_state.reset_memo_state()
-            log.info(
-                "session_state: intent=%s released memo phase",
-                _turn_intent.intent.value,
-            )
+            if getattr(_turn_intent, "reset_hard", False):
+                _session_state.reset_memo_state_hard()
+                log.info(
+                    "session_state: intent=%s HARD reset (topic+facts cleared)",
+                    _turn_intent.intent.value,
+                )
+            else:
+                _session_state.reset_memo_state()
+                log.info(
+                    "session_state: intent=%s released memo phase",
+                    _turn_intent.intent.value,
+                )
             if _SESSION_STATE_AVAILABLE and _save_state is not None:
                 try:
                     await _save_state(_session_state)
@@ -2771,17 +2852,28 @@ async def query_stream(req: QueryRequest, request: Request = None):
 
         # Direct-serve certain intents (don't touch phase0 at all)
         if _turn_intent.route_to == "meta":
-            # System info / capabilities question
-            async def _meta_gen():
-                meta_text = _build_meta_response(q)
-                async for frame in _stream_text_direct(
-                    meta_text, "meta_info", 95, chunk_size=60,
-                ):
-                    yield frame
-            return _wrap_with_state_save(
-                StreamingResponse(_meta_gen(), media_type="text/event-stream"),
-                _session_state,
-            )
+            # System info / capabilities question.
+            # FINDING #20: build_meta_response returns None for
+            # ambiguous metas (e.g. content question misclassified
+            # as meta). In that case we DO NOT show the identity
+            # card — we fall through to the general legal pipeline.
+            _meta_text = _build_meta_response(q)
+            if _meta_text is not None:
+                async def _meta_gen(_text=_meta_text):
+                    async for frame in _stream_text_direct(
+                        _text, "meta_info", 95, chunk_size=60,
+                    ):
+                        yield frame
+                return _wrap_with_state_save(
+                    StreamingResponse(_meta_gen(), media_type="text/event-stream"),
+                    _session_state,
+                )
+            else:
+                log.info(
+                    "meta_response=None → degrade to general pipeline "
+                    "(intent was misclassified as meta)"
+                )
+                # Fall through — do NOT short-circuit with identity card.
 
         if _turn_intent.route_to == "casual":
             # Friendly / emotional reply, no legal content forced
@@ -2823,6 +2915,25 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 "turn_intent=%s (conf=%.2f) → force handle_memo_smart",
                 _turn_intent.intent.value, _turn_intent.confidence,
             )
+            # FINDING #20: on HARD reset (new-draft intent mid-memo),
+            # wipe the session_topic_memory AND pass an EMPTY history
+            # to handle_memo_smart. Otherwise the memo handler sweeps
+            # prior turns to recover topic+signals, and the old case's
+            # facts (e.g. drug case) leak into the new memo (e.g.
+            # custody) via _compute_memo_signals + stored topic.
+            _memo_history = _server_history
+            if getattr(_turn_intent, "reset_hard", False):
+                try:
+                    from core.session_topic_memory import (
+                        clear_session_topic_sync as _clear_topic_sync,
+                    )
+                    _clear_topic_sync(sid)
+                except Exception as _ct_err:
+                    log.debug("session_topic clear failed: %s", _ct_err)
+                _memo_history = []
+                log.info(
+                    "memo_smart: reset_hard — history wiped for fresh draft"
+                )
             if _session_state is not None:
                 _session_state.phase = _SessionPhase.AWAITING_MEMO_DETAILS
                 try:
@@ -2830,7 +2941,7 @@ async def query_stream(req: QueryRequest, request: Request = None):
                 except Exception:
                     pass
             return _wrap_with_state_save(
-                await handle_memo_smart(q, sid, _server_history),
+                await handle_memo_smart(q, sid, _memo_history),
                 _session_state,
             )
 
@@ -2869,6 +2980,30 @@ async def query_stream(req: QueryRequest, request: Request = None):
             )
 
     # ═════════════════════════════════════════════════════════════════
+    # FINDING #20 — Intent classifier veto on legacy memo gates
+    # ─────────────────────────────────────────────────────────────────
+    # When the CP9 intent classifier has already decided the turn is
+    # NOT memo-bound (general/meta/casual/command), the subsequent
+    # history-blob gates (_is_force_memo_request, Gates A/B/C, Gate D)
+    # must NOT override that verdict. Otherwise a standalone legal
+    # query ("كم يبلغ راتب موظف...") gets dragged into the residual
+    # memo context just because an earlier assistant turn said
+    # "قبل ما أكتب مذكرة". The classifier is authoritative for intent;
+    # the gates are a fallback for when the classifier is silent.
+    # ═════════════════════════════════════════════════════════════════
+    _classifier_blocks_memo_gates = bool(
+        _turn_intent is not None
+        and _turn_intent.intent.value in (
+            "new_legal_question",
+            "meta_system_query",
+            "casual_social",
+            "complaint_feedback",
+            "clarification",
+            "command",
+        )
+    )
+
+    # ═════════════════════════════════════════════════════════════════
     # Force-Memo Intent Gate (runs BEFORE everything else)
     # ─────────────────────────────────────────────────────────────────
     # Catches memo requests that phase0's flat substring matcher misses
@@ -2878,7 +3013,7 @@ async def query_stream(req: QueryRequest, request: Request = None):
     # handle_memo_smart which will either draft or ask for details
     # based on signal sufficiency. See FINDING §11.
     # ═════════════════════════════════════════════════════════════════
-    if _is_force_memo_request(q):
+    if not _classifier_blocks_memo_gates and _is_force_memo_request(q):
         log.info(
             "force_memo: intent detected (verb+noun+topic) → handle_memo_smart"
         )
@@ -2934,7 +3069,11 @@ async def query_stream(req: QueryRequest, request: Request = None):
             )
 
     _force_memo = False
-    if not _fresh_question and req.history and len(req.history) >= 2:
+    if (
+        not _classifier_blocks_memo_gates
+        and not _fresh_question
+        and req.history and len(req.history) >= 2
+    ):
         _hist_assistant_blob = " ".join(
             (m.get("content") or "") for m in req.history
             if m.get("role") == "assistant"
@@ -3030,7 +3169,12 @@ async def query_stream(req: QueryRequest, request: Request = None):
     # truncated history. Pure function; no side effects.
     # Respects the fresh-question override so standalone factual
     # questions are NOT captured.
-    if not _fresh_question and _is_memo_details_response(q, req.history):
+    # FINDING #20: also respect the intent classifier's non-memo verdict.
+    if (
+        not _classifier_blocks_memo_gates
+        and not _fresh_question
+        and _is_memo_details_response(q, req.history)
+    ):
         log.info("memo_continuation(D): structured details response → route=memo")
         return _wrap_with_state_save(
             await handle_memo_smart(q, sid, req.history or []),
