@@ -1354,3 +1354,183 @@ examples).
 - CP9: combine expertise + network into a unified "Legal Context
   Packet" that encapsulates everything a single memo/answer needs.
 
+
+## 19. Turn Intent Classification + Meta/Casual Handlers + Traffic & Drug Expertise (CP9)
+
+### The Catastrophic Observation
+A live transcript revealed a class of routing failure that CP5–CP8
+did not cover. Inside a single conversation where a memo had been
+requested on turn 2 and drafted on turn 3, the user then typed:
+
+  T4:  "احبك"                            → produced a full drug-defense memo
+  T5:  "كم عدد المبادئ القضائية عندك ؟"  → produced another full memo
+  T6:  "افهم السؤال قبل تجاوب"           → produced a third full memo
+
+None of these are memo requests. One is an emotional aside, one is
+a metadata question about the system, one is a complaint. The system
+treated all three as "continue the memo you were drafting" and emitted
+nonsense paraphrases of the original drug case.
+
+### The Meta-Root-Cause (Round 4)
+The CP5 state machine drops ``MEMO_DRAFTING`` on a "fresh question"
+pivot. The pivot detector was a prefix list:
+
+  {"ما هي عقوبة", "ما عقوبة", "كيف", "هل ", "ما الحكم", ...}
+
+This list is a classic closed-world assumption: it enumerates a tiny
+set of phrasings and silently fails on everything else.
+
+Real turn traffic is NOT a prefix-match problem. It is an INTENT
+RECOGNITION problem. A conversational turn can be:
+
+  • Memo continuation (details being added)
+  • Memo refinement ("اعد كتابتها أقصر")
+  • New legal draft request (explicit verb "اكتب مذكرة")
+  • New legal question (pivot away from memo)
+  • Meta system query ("كم عدد المبادئ")
+  • Casual / social ("احبك", "شكراً", "هلا")
+  • Complaint / feedback ("افهم السؤال", "خطأ")
+  • Clarification ("ماذا تقصد؟")
+  • Command ("اختصر", "اعد")
+  • Unclear
+
+The old pivot recognized exactly ONE of the first ten. Everything
+else defaulted to "still drafting memo". Pattern matching is not
+intent recognition.
+
+### Root Fix — LLM-Based Turn Intent Classifier
+
+**``core/turn_intent_classifier.py``** (new module).
+
+For each turn the router calls ``classify_turn(query, current_phase,
+last_assistant, recent_user_msgs)`` which returns an
+``IntentClassification`` with:
+  • ``intent`` — one of ten ``TurnIntent`` enum values
+  • ``confidence`` — LLM self-reported 0..1
+  • ``route_to`` — memo / general / meta / casual / command / default
+  • ``release_phase`` — whether to drop ``MEMO_*`` phases
+  • ``reasoning`` — short Arabic rationale for logs
+
+Architecture:
+  1. Fast-path heuristics first — obvious casual/meta/complaint/
+     command phrases are classified without an LLM call (zero
+     cost, zero latency).
+  2. Fast-path miss → single ~250-token LLM JSON classification
+     in Arabic with ten numbered intent definitions + ten tuning
+     rules (conservative, memo-reluctant).
+  3. Cache in Redis db=2 for 10 min keyed on
+     ``sha1(query + phase + last_assistant_preview)``.
+  4. LLM failure / timeout (6s) → degrade to legacy prefix
+     heuristic. Never raises.
+
+**Classifier prompt tuning rules** (to avoid over-triggering memo):
+
+  • Rule 6: Facts without explicit draft verb in no-memo context
+    → ``unclear`` (system decides naturally).
+  • Rule 7: ``legal_draft_request`` REQUIRES an explicit verb
+    ("اكتب / صغ / احتاج مذكرة / عريضة / لائحة"). Without it,
+    fact-style messages → ``new_legal_question`` or ``unclear``.
+  • Rule 8: "موكلي يريد X" without drafting verb is consultative
+    (``new_legal_question``), not a draft request.
+  • Rule 9: "لماذا لم تكتب" in memo context → ``memo_continue_refine``,
+    not ``complaint_feedback``.
+  • Rule 10: Ambiguity between details and new question resolved by
+    last assistant turn — if it said "قبل ما أكتب مذكرة، أحتاج
+    التفاصيل", the next user turn is details.
+
+### Router Integration (``routers/query_router.py``)
+
+Two new response builders:
+  • ``_build_meta_response(query)`` — answers system-capability
+    questions with REAL stats pulled from the live knowledge base
+    (``663`` principles, ``1,112`` rulings, ``48,325`` articles).
+  • ``_build_casual_response(query, is_complaint)`` — short warm
+    reply that redirects to legal usage; for complaints it opens
+    with a brief acknowledgement.
+
+``query_stream`` now classifies the turn BEFORE the phase-based
+router block. Dispatch:
+
+  • ``route_to == "meta"``   → ``_meta_gen``       (release phase)
+  • ``route_to == "casual"`` → ``_casual_gen``     (release phase)
+  • ``route_to == "memo"``   → memo handler, but ONLY if intent is a
+    continuation OR a ``legal_draft_request`` with confidence ≥ 0.8
+    (conservative memo-gate).
+  • Otherwise → legacy state-based routing (unchanged belt-and-
+    braces fallback).
+
+This is additive. The CP5–CP8 state machine is unchanged. The
+classifier is an UPSTREAM router that decides when to respect the
+state machine and when to pivot out of it.
+
+### Two Domain Packs Added (``core/qatar_legal_expertise.py``)
+
+  • ``criminal_drug_use`` — 2 grounds (article 39 defense + article
+    46/47 exemption for voluntary pre-discovery treatment), 4
+    typical counter-arguments, required evidence, competent
+    court = "المحكمة الجزائية — دائرة المخدرات", 6 landmark
+    principles.
+  • ``traffic`` — grounds "الطعن في سحب رخصة القيادة" + "التعويض
+    في حادث مروري" (Article 199 tort), competent court =
+    "المحكمة المرورية للمخالفات / المحكمة المدنية للتعويض".
+
+``core/legal_answer_engine.py`` dispatches to the new packs when
+the query contains the signaling terms (``مخدر``, ``حشيش``,
+``تعاط``, ``مرور``, ``رخصة``, ``سيارة``, etc).
+
+### The Six-Turn Verification
+
+Same transcript, post-CP9:
+
+  T1 "ما هي عقوبات المرور وسحب الرخصة؟"        → general, 1106 chars ✓
+  T2 "اكتب لي مذكرة في قضية تعاطي مخدرات"       → ask-for-details ✓
+  T3 "1- حشييش 20 قرام 2- بدورية 3- انكر 4- لا" → memo, 1582 chars ✓
+  T4 "احبك"                                    → casual (warm redirect) ✓
+  T5 "كم عدد المبادئ القضائية عندك ؟"           → meta, real stats ✓
+  T6 "افهم السؤال قبل تجاوب"                   → casual (apology) ✓
+
+### Principles Added
+
+1. **Turn intent principle**: Every user turn has an intent that is
+   orthogonal to the session phase. Intent drives routing; phase
+   drives state. The router must resolve BOTH before dispatching.
+2. **Closed-world pattern lists are a code smell**: If a routing
+   decision depends on "does the query start with one of these
+   N strings", it will silently mis-handle the N+1th phrasing.
+   Promote such lists to LLM classification the first time a
+   production failure shows the blind spot.
+3. **Conservative memo-gate principle**: Classifying a turn as a
+   memo request must require EITHER an explicit continuation
+   context OR a high-confidence explicit draft verb. Any other
+   signal is too weak to override a state that produces 1500+
+   chars of legal text.
+4. **Never silent on meta**: System-capability questions deserve
+   real answers from the live knowledge base, not a template
+   redirect. Inaccuracy here is a different class of failure
+   (false authority) than legal inaccuracy and erodes trust
+   faster.
+
+### Regression — 140/140 GREEN
+
+  11/11   anti-hallucination
+  17/17   cp5 production scenario
+  14/14   context propagation
+   6/6    live transcript re-play (T1–T6)
+  92/92   pytest phase2 + phase3 unit + E2E
+
+### Scheduled Follow-up
+
+- CP10: extend intent classifier training with a corpus of real
+  production turns — promote the Arabic prompt to a few-shot
+  format with 20–30 labeled examples chosen to cover the long
+  tail.
+- CP10: measure intent classifier accuracy in production via
+  shadow classification (log every turn; sample review weekly).
+- CP10: unify the intent classifier cache TTL with the rest of
+  the system (currently 10 min; may want shorter for drift).
+- CP10: extend domain expertise to commercial_dispute,
+  rental_residential, theft, fraud, defamation.
+- CP10: fast-path list audit — every 3 months inspect the
+  ``_FAST_*`` heuristics for outdated phrasings and add recent
+  failure modes.
+

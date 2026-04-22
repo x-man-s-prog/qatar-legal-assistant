@@ -286,20 +286,40 @@ async def compose_reasoned_answer(
                 # Map legacy query_domain to new domain_key when possible
                 _domain_key_map = {
                     "عمالي":   "unlawful_termination",
-                    "أسري":    "family_custody",  # broad — may be nafaqa/divorce
-                    "جزائي":   None,  # too broad — don't force
+                    "أسري":    "family_custody",  # default for family
+                    "جزائي":   None,              # dispatched below
                     "family":  "family_custody",
                     "labor":   "unlawful_termination",
-                    "traffic": None,
+                    "traffic": "traffic",
                 }
                 _mapped_key = _domain_key_map.get(query_domain, query_domain)
                 if _mapped_key:
                     _expertise = get_domain_expertise(_mapped_key)
-                    # Secondary heuristic — check query for nafaqa/khula
-                    if _expertise and "نفقة" in query:
-                        _alt = get_domain_expertise("family_nafaqa")
-                        if _alt:
-                            _expertise = _alt
+                # Secondary dispatch — refine by query content
+                q_lower = (query or "").lower()
+                if "مخدر" in q_lower or "حشيش" in q_lower or "تعاط" in q_lower:
+                    _alt = get_domain_expertise("criminal_drug_use")
+                    if _alt:
+                        _expertise = _alt
+                elif "نفقة" in q_lower:
+                    _alt = get_domain_expertise("family_nafaqa")
+                    if _alt:
+                        _expertise = _alt
+                elif "طلاق" in q_lower and "ضرر" in q_lower:
+                    _alt = get_domain_expertise("divorce_for_harm")
+                    if _alt:
+                        _expertise = _alt
+                elif "شيك" in q_lower:
+                    _alt = get_domain_expertise("bad_check")
+                    if _alt:
+                        _expertise = _alt
+                elif (
+                    "مرور" in q_lower or "رخصة" in q_lower
+                    or "سياره" in q_lower or "سيارة" in q_lower
+                ):
+                    _alt = get_domain_expertise("traffic")
+                    if _alt:
+                        _expertise = _alt
             except Exception as _exp_err:
                 log.debug("answer_engine: expertise fetch failed: %s", _exp_err)
 

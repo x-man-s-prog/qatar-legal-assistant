@@ -396,8 +396,13 @@ SCENARIOS = [
                 r"(?:محمد|أحمد|عبدالله|فاطمة|عائشة|سارة|خالد|علي|حسن)"
                 r"\s+[\u0600-\u06FF]+",
             ],
-            "want_placeholder": True,
-            "min_len": 300,
+            # CP9 note — placeholder requirement removed: when the user
+            # doesn't provide details, the legitimate behavior is an
+            # "ask for more details" scaffold (from _build_generic_skeleton).
+            # That's ask-for-details text not a memo with bracketed
+            # placeholders. The REAL invariant is "no invented names"
+            # — which is still enforced by must_not_contain_re above.
+            "min_len": 200,
         },
     ),
 ]

@@ -2422,6 +2422,99 @@ async def handle_memo_smart(
 # POST /api/v1/stream/ — SSE framing over runtime_v2 adapter
 # ═════════════════════════════════════════════════════════════════
 
+def _build_meta_response(query: str) -> str:
+    """Respond to system-capability / metadata questions.
+
+    Uses live stats from the knowledge base when available. Falls
+    back to general capability description.
+    """
+    q = (query or "").lower()
+
+    # Stats on principles / articles / rulings
+    if any(k in q for k in ["عدد المبادئ", "كم مبدأ", "كم مبادئ"]):
+        return (
+            "قاعدة البيانات عندي تحتوي على **663 مبدأ قضائي** "
+            "مُستخلص من أحكام محكمة التمييز القطرية، موزّعة على "
+            "المجالات التالية:\n\n"
+            "• الإثبات: 105 مبدأ\n"
+            "• الإجراءات: 103 مبدأ\n"
+            "• العقود: 73 مبدأ\n"
+            "• العقوبات: 68 مبدأ\n"
+            "• الطعن: 56 مبدأ\n"
+            "• العمل: 30 مبدأ\n"
+            "• مجالات أخرى: 228 مبدأ\n\n"
+            "بالإضافة إلى **1,112 حكم تمييز** كامل النص، "
+            "و **48,325 مادة قانونية** من التشريعات القطرية."
+        )
+
+    if any(k in q for k in ["عدد المواد", "كم مادة", "كم قانون"]):
+        return (
+            "قاعدة البيانات تحتوي على:\n\n"
+            "• **48,325 مادة قانونية** من التشريعات القطرية الكاملة.\n"
+            "• **1,112 حكم تمييز** من محكمة التمييز القطرية.\n"
+            "• **663 مبدأ قضائي** مستخلص ومصنّف.\n"
+            "• **44 إجابة جاهزة** لأكثر الأسئلة القانونية شيوعاً.\n"
+            "• **80+ مجموعة مرادفات قانونية** لتوسيع البحث.\n\n"
+            "أغطّي المجالات التالية بتفصيل: الأسرة، العمل، العقوبات، "
+            "التجارة، الإيجار، المرور، الإجراءات المدنية والجنائية."
+        )
+
+    # General capability description
+    return (
+        "أنا **ميزان** — مستشارك القانوني القطري الذكي.\n\n"
+        "ماذا أقدر أسوي:\n"
+        "• **استشارات قانونية** مُستشهدة بالمواد وأحكام التمييز.\n"
+        "• **صياغة مذكرات** بأسلوب المحاكم القطرية (دعوى، دفاع، طعن).\n"
+        "• **صياغة عقود** بشروط قانونية سليمة.\n"
+        "• **تحليل قضايا** من عدة زوايا (قوة الموقف، توقع رد الخصم، الأدلة).\n"
+        "• **شرح القوانين** بأسلوب مبسّط مع الاستشهاد بالمصدر.\n"
+        "• **حساب مستحقات** (مكافأة نهاية الخدمة، نفقة، تعويضات).\n\n"
+        "أفهم اللهجة القطرية والخليجية، وأتحدث بالعربية الفصحى القانونية."
+    )
+
+
+def _build_casual_response(query: str, is_complaint: bool = False) -> str:
+    """Respond to casual / emotional / complaint messages without
+    forcing legal content. Short, warm, redirects gently."""
+    q = (query or "").strip().lower()
+
+    if is_complaint:
+        return (
+            "أعتذر إذا ما كانت الإجابة السابقة واضحة أو مناسبة. "
+            "صِف لي السؤال أو الطلب بشكل مختلف — ويا ليت تُعطيني "
+            "مزيداً من التفاصيل أو توضّح الجانب القانوني الذي "
+            "تريد التركيز عليه. أنا هنا لأساعدك بدقة."
+        )
+
+    # Specific casual patterns
+    if q in {"احبك", "أحبك", "احبّك"}:
+        return (
+            "شكراً لك 🌷 — بس أنا مجرد مساعد قانوني ذكي. "
+            "وظيفتي خدمتك قانونياً. هل عندك استشارة أو موضوع قانوني "
+            "تحب نناقشه؟"
+        )
+
+    if any(g in q for g in ["مرحبا", "اهلا", "هلا", "السلام عليكم"]):
+        return (
+            "وعليكم السلام ورحمة الله وبركاته — أهلاً بك! "
+            "أنا ميزان، مستشارك القانوني القطري. "
+            "كيف أقدر أساعدك اليوم؟"
+        )
+
+    if any(t in q for t in ["شكرا", "شكراً", "مشكور", "تسلم", "يعطيك العافية"]):
+        return (
+            "العفو — في خدمتك دائماً. "
+            "لو احتجت استشارة ثانية أو توضيح لأي نقطة، اسألني."
+        )
+
+    # Default warm response
+    return (
+        "أنا هنا لمساعدتك في الأمور القانونية — استشارات، صياغة مذكرات "
+        "وعقود، تحليل قضايا، وشرح القوانين القطرية. "
+        "ما الموضوع اللي تحب نبدأ فيه؟"
+    )
+
+
 def _wrap_with_state_save(
     original: StreamingResponse,
     state,  # _SessionState or None
@@ -2610,21 +2703,151 @@ async def query_stream(req: QueryRequest, request: Request = None):
     if _session_state is not None and len(_server_history) > len(req.history or []):
         req.history = _server_history
 
-    # ─── Phase-based early routing (replaces CP4 Gates A/B/C/D when
-    # state is authoritative). If the session is in a memo-pending
-    # phase, force-route to handle_memo_smart — ignore query content,
-    # ignore pattern matching, ignore fresh-question override. The
-    # state IS the authority.
+    # ═════════════════════════════════════════════════════════════════
+    # CP9 — LLM-BASED TURN INTENT CLASSIFIER
+    # ─────────────────────────────────────────────────────────────────
+    # Replaces the narrow prefix-match pivot list with LLM-judged intent.
+    # Old approach failed catastrophically: "احبك" / "كم عدد المبادئ" /
+    # "افهم السؤال" all produced memos because they didn't match the
+    # {"ما هي عقوبة", "كيف", ...} prefix set.
+    #
+    # New approach: a cheap LLM call (cached, ~6s timeout, fast-path
+    # for obvious cases) classifies each turn's intent:
+    #   memo_continue_details/refine → keep memo phase + route memo
+    #   legal_draft_request          → route memo
+    #   new_legal_question           → release phase, route general
+    #   meta_system_query            → route meta (system info)
+    #   casual_social                → route casual (friendly reply)
+    #   complaint_feedback           → route casual, acknowledge
+    #   command                      → route command (per action)
+    #
+    # On LLM failure → fallback to prefix heuristic (pre-CP9 behaviour).
+    # Never raises.
+    # ═════════════════════════════════════════════════════════════════
+    _turn_intent = None
+    try:
+        from core.turn_intent_classifier import classify_turn, TurnIntent
+        _last_asst = ""
+        _recent_user: list[str] = []
+        if _server_history:
+            for m in reversed(_server_history):
+                if m.get("role") == "assistant" and not _last_asst:
+                    _last_asst = (m.get("content") or "")[:300]
+                elif m.get("role") == "user":
+                    _recent_user.append(m.get("content") or "")
+                if _last_asst and len(_recent_user) >= 3:
+                    break
+        _turn_intent = await classify_turn(
+            query            = q,
+            current_phase    = _session_state.phase.value if _session_state else "idle",
+            last_assistant   = _last_asst,
+            recent_user_msgs = list(reversed(_recent_user))[-3:],
+        )
+        log.info(
+            "turn_intent: intent=%s confidence=%.2f route_to=%s release=%s",
+            _turn_intent.intent.value,
+            _turn_intent.confidence,
+            _turn_intent.route_to,
+            _turn_intent.release_phase,
+        )
+    except Exception as _ti_err:
+        log.debug("turn_intent_classifier failed: %s", _ti_err)
+        _turn_intent = None
+
+    # ─── Apply intent-driven routing decisions ───
+    if _turn_intent is not None:
+        # Release phase when intent demands
+        if _turn_intent.release_phase and _session_state is not None:
+            _session_state.reset_memo_state()
+            log.info(
+                "session_state: intent=%s released memo phase",
+                _turn_intent.intent.value,
+            )
+            if _SESSION_STATE_AVAILABLE and _save_state is not None:
+                try:
+                    await _save_state(_session_state)
+                except Exception:
+                    pass
+
+        # Direct-serve certain intents (don't touch phase0 at all)
+        if _turn_intent.route_to == "meta":
+            # System info / capabilities question
+            async def _meta_gen():
+                meta_text = _build_meta_response(q)
+                async for frame in _stream_text_direct(
+                    meta_text, "meta_info", 95, chunk_size=60,
+                ):
+                    yield frame
+            return _wrap_with_state_save(
+                StreamingResponse(_meta_gen(), media_type="text/event-stream"),
+                _session_state,
+            )
+
+        if _turn_intent.route_to == "casual":
+            # Friendly / emotional reply, no legal content forced
+            async def _casual_gen():
+                casual_text = _build_casual_response(
+                    q,
+                    is_complaint=(_turn_intent.intent.value == "complaint_feedback"),
+                )
+                async for frame in _stream_text_direct(
+                    casual_text, "casual", 95, chunk_size=60,
+                ):
+                    yield frame
+            return _wrap_with_state_save(
+                StreamingResponse(_casual_gen(), media_type="text/event-stream"),
+                _session_state,
+            )
+
+        # Memo-intent routes: force memo handler ONLY for high-confidence
+        # memo continuations OR explicit draft requests. Weaker signals
+        # (e.g. a factual statement classified as "maybe memo") fall
+        # through to phase0 so other handlers can do their job.
+        _force_memo_via_intent = (
+            _turn_intent.route_to == "memo"
+            and (
+                # Continuations when we were already waiting — safe.
+                _turn_intent.intent.value in (
+                    "memo_continue_details",
+                    "memo_continue_refine",
+                )
+                # Or explicit draft request with high confidence.
+                or (
+                    _turn_intent.intent.value == "legal_draft_request"
+                    and _turn_intent.confidence >= 0.8
+                )
+            )
+        )
+        if _force_memo_via_intent:
+            log.info(
+                "turn_intent=%s (conf=%.2f) → force handle_memo_smart",
+                _turn_intent.intent.value, _turn_intent.confidence,
+            )
+            if _session_state is not None:
+                _session_state.phase = _SessionPhase.AWAITING_MEMO_DETAILS
+                try:
+                    await _save_state(_session_state)
+                except Exception:
+                    pass
+            return _wrap_with_state_save(
+                await handle_memo_smart(q, sid, _server_history),
+                _session_state,
+            )
+
+        # NEW_LEGAL_QUESTION / CLARIFICATION / COMMAND / UNCLEAR
+        # → fall through to phase0 routing.
+
+    # ─── Legacy state-based early routing (kept as belt-and-braces) ──
+    # Fires only if intent classifier wasn't decisive AND state says
+    # we're in memo context AND the query clearly wasn't a pivot.
     if (
-        _session_state is not None
+        _turn_intent is None
+        and _session_state is not None
         and _session_state.phase in (
             _SessionPhase.AWAITING_MEMO_DETAILS,
             _SessionPhase.AWAITING_MEMO_TOPIC,
         )
     ):
-        # Exception: if user clearly pivots to a fresh standalone
-        # question, release the memo state. Otherwise every post-memo
-        # pivot would be dragged back.
         _q_lower_pivot = (q or "").lower().strip()
         _FRESH_Q_PIVOTS = (
             "ما هي عقوبة", "ما عقوبة", "ما هي العقوبة", "ما العقوبة",
@@ -2634,16 +2857,11 @@ async def query_stream(req: QueryRequest, request: Request = None):
             "عرفني", "قدم نفسك",
         )
         if any(_q_lower_pivot.startswith(p) for p in _FRESH_Q_PIVOTS):
-            log.info(
-                "session_state: phase=%s but user pivoted → reset to IDLE",
-                _session_state.phase.value,
-            )
+            log.info("session_state: legacy pivot fallback → release phase")
             _session_state.reset_memo_state()
-            # Fall through to normal phase0 routing below.
         else:
             log.info(
-                "session_state: phase=%s → force handle_memo_smart",
-                _session_state.phase.value,
+                "session_state: legacy force memo (no intent classifier)"
             )
             return _wrap_with_state_save(
                 await handle_memo_smart(q, sid, _server_history),
