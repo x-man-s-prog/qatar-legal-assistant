@@ -126,11 +126,22 @@ def _extract_title(html: str) -> str | None:
     return cand or None
 
 
-def download_law(law_id: int, *, sleep: float = 0.3) -> dict:
+def download_law(law_id: int, *, sleep: float = 0.3, skip_existing: bool = True) -> dict:
     """Download everything for one law. Returns summary dict."""
     law_dir = OUT_DIR / str(law_id)
     articles_dir = law_dir / "articles"
     files_dir = law_dir / "files"
+
+    # Skip if already fully downloaded (meta.json is the completion marker)
+    meta_path = law_dir / "meta.json"
+    if skip_existing and meta_path.exists():
+        try:
+            cached = json.loads(meta_path.read_text(encoding="utf-8"))
+            cached["skipped"] = True
+            return cached
+        except Exception:
+            pass  # fall through to re-download
+
     _ensure_dir(law_dir)
     _ensure_dir(articles_dir)
     _ensure_dir(files_dir)
@@ -163,12 +174,20 @@ def download_law(law_id: int, *, sleep: float = 0.3) -> dict:
     # ── 2. LawView (full-text)
     url = f"{BASE}/LawView.aspx?LawID={law_id}&language=ar"
     status, body, _ = _fetch(url)
+    lawview_has_content = False
     if status == 200 and len(body) > 500:
         summary["urls"]["lawview"] = url
         summary["file_sizes"]["lawview"] = _save(law_dir / "lawview.html", body)
         summary["hashes"]["lawview"] = _sha256_hex(body)
+        # LawView sometimes returns 200 with an empty shell — detect and
+        # force fallback to per-section pages when no article markers
+        # appear in the flat HTML.
+        text = body.decode("utf-8", errors="replace")
+        if re.search(r"(?:المادة|مادة)\s*\(?\s*\d+", text):
+            lawview_has_content = True
     else:
         summary["errors"].append(f"LawView {status}")
+    summary["lawview_has_content"] = lawview_has_content
     time.sleep(sleep)
 
     # ── 3. LawOtherAttachments
@@ -192,22 +211,25 @@ def download_law(law_id: int, *, sleep: float = 0.3) -> dict:
         summary["file_sizes"]["owner"] = _save(law_dir / "owner.html", body)
     time.sleep(sleep)
 
-    # ── 5. Per-section article pages
+    # ── 5. Per-section article pages.  Skipped when LawView *has
+    # content* (real article markers). For small/cancelled laws,
+    # LawView often returns an empty shell — then we MUST fetch per
+    # section.
     tree_ids = _extract_tree_ids(lawpage_html)
     summary["tree_ids"] = tree_ids
-    for tid in tree_ids:
-        art_url = f"{BASE}/LawArticles.aspx?LawTreeSectionID={tid}&lawId={law_id}&language=ar"
-        status, body, _ = _fetch(art_url)
-        if status == 200 and len(body) > 500:
-            fn = articles_dir / f"{tid}.html"
-            _save(fn, body)
-            summary["articles"].append({
-                "tree_id": tid,
-                "size":    len(body),
-                "hash":    _sha256_hex(body),
-                "url":     art_url,
-            })
-        time.sleep(sleep)
+    if not summary.get("lawview_has_content", False):
+            art_url = f"{BASE}/LawArticles.aspx?LawTreeSectionID={tid}&lawId={law_id}&language=ar"
+            status, body, _ = _fetch(art_url)
+            if status == 200 and len(body) > 500:
+                fn = articles_dir / f"{tid}.html"
+                _save(fn, body)
+                summary["articles"].append({
+                    "tree_id": tid,
+                    "size":    len(body),
+                    "hash":    _sha256_hex(body),
+                    "url":     art_url,
+                })
+            time.sleep(sleep)
 
     # ── 6. Download each attachment file referenced
     for att in summary["attachments"]:
